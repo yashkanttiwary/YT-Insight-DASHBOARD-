@@ -19,6 +19,7 @@ export interface DisplayConfig {
 export interface DashboardKeys {
   youtubeKey: string;
   youtubeChannels: YouTubeChannelConfig[];
+  youtubeCompetitors?: YouTubeChannelConfig[];
   instagramKey: string;
   instagramAccounts: InstagramAccountConfig[];
   display?: DisplayConfig;

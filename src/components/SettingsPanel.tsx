@@ -12,6 +12,7 @@ interface SettingsPanelProps {
 export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
   const [youtubeKey, setYoutubeKey] = useState("");
   const [youtubeChannels, setYoutubeChannels] = useState<YouTubeChannelConfig[]>([]);
+  const [youtubeCompetitors, setYoutubeCompetitors] = useState<YouTubeChannelConfig[]>([]);
   const [instagramKey, setInstagramKey] = useState("");
   const [instagramAccounts, setInstagramAccounts] = useState<InstagramAccountConfig[]>([]);
   const [geminiKey, setGeminiKey] = useState("");
@@ -32,6 +33,12 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
         const parsedYt = yt ? JSON.parse(yt) : [];
         setYoutubeChannels(Array.isArray(parsedYt) ? parsedYt : []);
       } catch (e) { setYoutubeChannels([]); }
+
+      try {
+        const ytc = localStorage.getItem("f1_youtubeCompetitors");
+        const parsedYtc = ytc ? JSON.parse(ytc) : [];
+        setYoutubeCompetitors(Array.isArray(parsedYtc) ? parsedYtc : []);
+      } catch (e) { setYoutubeCompetitors([]); }
 
       setInstagramKey(localStorage.getItem("f1_instagramKey") || "");
       try {
@@ -74,6 +81,7 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
     }
     
     const validYt = youtubeChannels.filter(c => (c.channel_id || "").trim() !== "");
+    const validCompetitors = youtubeCompetitors.filter(c => (c.channel_id || "").trim() !== "");
     const validIg = instagramAccounts.filter(c => (c.business_account_id || "").trim() !== "");
     
     if (youtubeChannels.length > 0 && validYt.length === 0) {
@@ -89,11 +97,13 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
     setErrorMsg("");
 
     const ytChannelsString = JSON.stringify(validYt);
+    const ytCompetitorsString = JSON.stringify(validCompetitors);
     const igAccountsString = JSON.stringify(validIg);
     const displayString = JSON.stringify(displayConfig);
 
     localStorage.setItem("f1_youtubeKey", youtubeKey);
     localStorage.setItem("f1_youtubeChannels", ytChannelsString);
+    localStorage.setItem("f1_youtubeCompetitors", ytCompetitorsString);
     localStorage.setItem("f1_instagramKey", instagramKey);
     localStorage.setItem("f1_instagramAccounts", igAccountsString);
     localStorage.setItem("f1_displayConfig", displayString);
@@ -109,6 +119,7 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
     onSave({
       youtubeKey,
       youtubeChannels: validYt,
+      youtubeCompetitors: validCompetitors,
       instagramKey,
       instagramAccounts: validIg,
       display: displayConfig,
@@ -119,6 +130,7 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
   const handleDisconnectYouTube = () => {
     setYoutubeKey("");
     setYoutubeChannels([]);
+    setYoutubeCompetitors([]);
     setErrorMsg("");
   };
 
@@ -139,6 +151,20 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
 
   const removeYouTubeChannel = (index: number) => {
     setYoutubeChannels((youtubeChannels || []).filter((_, i) => i !== index));
+  };
+
+  const addYouTubeCompetitor = () => {
+    setYoutubeCompetitors([...(youtubeCompetitors || []), { channel_id: "", name: "" }]);
+  };
+
+  const updateYouTubeCompetitor = (index: number, field: keyof YouTubeChannelConfig, value: string) => {
+    const newChannels = [...(youtubeCompetitors || [])];
+    newChannels[index] = { ...newChannels[index], [field]: value };
+    setYoutubeCompetitors(newChannels);
+  };
+
+  const removeYouTubeCompetitor = (index: number) => {
+    setYoutubeCompetitors((youtubeCompetitors || []).filter((_, i) => i !== index));
   };
 
   const addInstagramAccount = () => {
@@ -332,6 +358,46 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
                         />
                       </div>
                       <button onClick={() => removeYouTubeChannel(idx)} className="p-2 text-gray-500 hover:text-red-500 transition-colors">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="flex justify-between items-center mb-2 mt-4 border-t border-gray-200 dark:border-white/10 pt-4">
+                <label className="block text-[10px] font-bold uppercase text-purple-500 tracking-widest">Competitor Watchlist</label>
+                <button onClick={addYouTubeCompetitor} className="text-[10px] font-bold text-purple-500 uppercase flex items-center gap-1 hover:opacity-80">
+                  <Plus className="w-3 h-3" /> Add Competitor
+                </button>
+              </div>
+              {(!youtubeCompetitors || youtubeCompetitors.length === 0) ? (
+                <div className="text-center p-4 border border-dashed border-gray-200 dark:border-white/10 rounded-sm text-gray-500 text-xs font-mono">
+                  No competitors configured. Add one to track their performance.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {youtubeCompetitors.map((channel, idx) => (
+                    <div key={idx} className="flex gap-2 items-start bg-white dark:bg-white/5 p-2 rounded-sm border border-purple-500/30">
+                      <div className="flex-1 space-y-2">
+                        <input
+                          type="text"
+                          className="w-full bg-transparent border-b border-gray-300 dark:border-white/20 px-2 py-1 text-gray-900 dark:text-white font-mono text-sm focus:border-purple-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 transition-all placeholder:text-gray-600"
+                          value={channel?.name || ""}
+                          onChange={(e) => updateYouTubeCompetitor(idx, "name", e.target.value)}
+                          placeholder="Display Name (e.g., Rival Channel)"
+                        />
+                        <input
+                          type="text"
+                          className="w-full bg-transparent border-b border-gray-300 dark:border-white/20 px-2 py-1 text-gray-900 dark:text-white font-mono text-sm focus:border-purple-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 transition-all placeholder:text-gray-600"
+                          value={channel?.channel_id || ""}
+                          onChange={(e) => updateYouTubeCompetitor(idx, "channel_id", e.target.value)}
+                          placeholder="Channel URL, ID, or @handle"
+                        />
+                      </div>
+                      <button onClick={() => removeYouTubeCompetitor(idx)} className="p-2 text-gray-500 hover:text-red-500 transition-colors">
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>

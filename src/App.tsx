@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { Settings, RefreshCw, AlertTriangle, TrendingDown, TrendingUp, Activity, Users, Eye, Brain, PieChart as PieChartIcon, Map, Smartphone, Sparkles, Zap, CheckCircle2, Calendar, ChevronDown } from "lucide-react";
+import { Settings, RefreshCw, AlertTriangle, TrendingDown, TrendingUp, Activity, Users, Eye, Brain, PieChart as PieChartIcon, Map, Smartphone, Sparkles, Zap, CheckCircle2, Calendar, ChevronDown, MessageSquare, Crosshair } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { SettingsPanel } from "./components/SettingsPanel";
-import { checkStatus, fetchYouTubeData, fetchInstagramData, fetchAIInsights } from "./api";
+import { checkStatus, fetchYouTubeData, fetchInstagramData, fetchAIInsights, fetchYouTubeCompetitors, fetchVideoComments, analyzeComments } from "./api";
 import { DashboardKeys } from "./types";
 import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from "recharts";
 
@@ -42,6 +42,7 @@ export default function App() {
 
   const [isConfigured, setIsConfigured] = useState({ youtube: false, instagram: false });
   const [youtubeData, setYoutubeData] = useState<{ channels: any[], videos: any[] } | null>(null);
+  const [competitorData, setCompetitorData] = useState<{ channels: any[], videos: any[] } | null>(null);
   const [instagramData, setInstagramData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -58,12 +59,17 @@ export default function App() {
     } catch(e) {}
     return "30d";
   });
-  const [activeView, setActiveView] = useState<"global" | "compare" | "videos" | "algorithm" | "ai_insights" | "audience" | "calendar">("global");
+  const [activeView, setActiveView] = useState<"global" | "compare" | "videos" | "algorithm" | "ai_insights" | "audience" | "calendar" | "competitors">("global");
   const [videoSort, setVideoSort] = useState<"recent" | "views" | "likes" | "velocity" | "engagement" | "comments" | "score">("recent");
+  const [videoType, setVideoType] = useState<"all" | "shorts" | "long">("all");
 
   const [aiInsights, setAiInsights] = useState<any>(null);
   const [isAILoading, setIsAILoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [aiSelectedChannelId, setAiSelectedChannelId] = useState<string | 'all'>('all');
+
+  const [analyzingVideoId, setAnalyzingVideoId] = useState<string | null>(null);
+  const [videoCommentAnalysis, setVideoCommentAnalysis] = useState<Record<string, any>>({});
 
   const [selectedAudienceChannelId, setSelectedAudienceChannelId] = useState<string | null>(null);
   const [selectedCalendarChannelId, setSelectedCalendarChannelId] = useState<string | 'all'>('all');
@@ -150,13 +156,61 @@ export default function App() {
     });
   }, [youtubeData]);
 
+  const predictiveMilestone = useMemo(() => {
+    if (!selectedAudienceChannelId || !youtubeData?.channels) return null;
+    const channel = youtubeData.channels.find(c => c.id === selectedAudienceChannelId);
+    if (!channel) return null;
+    
+    const subs = Number(channel.statistics.subscriberCount || 0);
+    const vids = Number(channel.statistics.videoCount || 0);
+    const weeklyVelocity = Math.max(10, Math.floor((subs / Math.max(1, vids)) * 2));
+    
+    const targets = [1000, 10000, 100000, 1000000, 10000000, 100000000];
+    let nextTarget = targets.find(t => t > subs) || (subs + 1000000);
+    
+    const subsNeeded = nextTarget - subs;
+    const weeksNeeded = subsNeeded / weeklyVelocity;
+    const daysNeeded = Math.ceil(weeksNeeded * 7);
+    
+    return {
+      current: subs,
+      target: nextTarget,
+      velocity: weeklyVelocity,
+      days: daysNeeded
+    };
+  }, [selectedAudienceChannelId, youtubeData]);
+
   const sortedVideos = useMemo(() => {
     if (!youtubeData?.videos) return [];
     const now = new Date().getTime();
     const rangeMs = timeRange === '24h' ? 24 * 60 * 60 * 1000 : timeRange === '7d' ? 7 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
     
-    const videos = youtubeData.videos.filter(v => now - new Date(v.snippet.publishedAt).getTime() <= rangeMs);
+    let videos = youtubeData.videos.filter(v => now - new Date(v.snippet.publishedAt).getTime() <= rangeMs);
     
+    if (videoType === 'shorts') {
+      videos = videos.filter(v => {
+        const pt = v.contentDetails?.duration || "";
+        const match = pt.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
+        if (!match) return false;
+        const h = parseInt(match[1]) || 0;
+        const m = parseInt(match[2]) || 0;
+        const s = parseInt(match[3]) || 0;
+        const totalSeconds = (h * 3600) + (m * 60) + s;
+        return totalSeconds <= 60;
+      });
+    } else if (videoType === 'long') {
+      videos = videos.filter(v => {
+        const pt = v.contentDetails?.duration || "";
+        const match = pt.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
+        if (!match) return true;
+        const h = parseInt(match[1]) || 0;
+        const m = parseInt(match[2]) || 0;
+        const s = parseInt(match[3]) || 0;
+        const totalSeconds = (h * 3600) + (m * 60) + s;
+        return totalSeconds > 60;
+      });
+    }
+
     return videos.sort((a, b) => {
       if (videoSort === "views") {
         return Number(b.statistics.viewCount || 0) - Number(a.statistics.viewCount || 0);
@@ -270,7 +324,7 @@ export default function App() {
     setIsAILoading(true);
     setAiError(null);
     try {
-      const insights = await fetchAIInsights(youtubeData.videos, youtubeData.channels);
+      const insights = await fetchAIInsights(youtubeData.videos, youtubeData.channels, undefined, aiSelectedChannelId);
       setAiInsights(insights);
     } catch (err: any) {
       setAiError(err.message || "Failed to generate insights");
@@ -279,6 +333,44 @@ export default function App() {
     }
   };
 
+  const handleAnalyzeComments = async (videoId: string) => {
+    setAnalyzingVideoId(videoId);
+    try {
+      const comments = await fetchVideoComments(videoId);
+      const analysis = await analyzeComments(comments);
+      setVideoCommentAnalysis(prev => ({ ...prev, [videoId]: analysis }));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAnalyzingVideoId(null);
+    }
+  };
+
+  const competitorTags = useMemo(() => {
+    if (!competitorData?.videos) return [];
+    const tagsMap: Record<string, number> = {};
+    const now = new Date().getTime();
+    
+    competitorData.videos.forEach((v: any) => {
+       if (now - new Date(v.snippet.publishedAt).getTime() > 30 * 24 * 60 * 60 * 1000) return;
+       const tags = v.snippet.tags || [];
+       tags.forEach((tag: string) => {
+          const t = tag.toLowerCase().trim();
+          tagsMap[t] = (tagsMap[t] || 0) + 1;
+       });
+       // Extract keywords from title
+       const words = (v.snippet.title || "").split(/[\s|,-]+/).filter((w: string) => w.length > 4);
+       words.forEach((word: string) => {
+          const w = word.toLowerCase().trim();
+          tagsMap[w] = (tagsMap[w] || 0) + 0.5;
+       });
+    });
+
+    return Object.entries(tagsMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 30)
+      .map(([word, score]) => ({ word, score: Math.round(score) }));
+  }, [competitorData]);
 
   const loadData = useCallback(async (keys?: DashboardKeys) => {
     setIsLoading(true);
@@ -290,6 +382,13 @@ export default function App() {
       if (status.configured.youtube) {
         const ytData = await fetchYouTubeData(keys);
         setYoutubeData(ytData);
+        
+        try {
+          const compData = await fetchYouTubeCompetitors(keys);
+          setCompetitorData(compData);
+        } catch(e) {
+           console.error("Failed to load competitors", e);
+        }
       }
       
       if (status.configured.instagram) {
@@ -393,6 +492,7 @@ export default function App() {
               <button onClick={() => setActiveView('ai_insights')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'ai_insights' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Sparkles className="w-4 h-4" /> AI Insights</button>
               <button onClick={() => setActiveView('audience')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'audience' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Users className="w-4 h-4" /> Audience</button>
               <button onClick={() => setActiveView('calendar')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'calendar' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Calendar className="w-4 h-4" /> Calendar</button>
+              <button onClick={() => setActiveView('competitors')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'competitors' ? 'text-purple-500 border-b-2 border-purple-500 -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Crosshair className="w-4 h-4" /> Competitors</button>
             </div>
 
             {activeView === "global" && (
@@ -599,18 +699,25 @@ export default function App() {
               <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded p-6 flex-1 flex flex-col overflow-hidden">
                 <div className="flex justify-between items-center mb-6">
                   <h2 className="text-xs font-black uppercase tracking-widest text-gray-600 dark:text-gray-400">// Video Leaderboard</h2>
-                  <div className="flex flex-wrap gap-2 bg-white dark:bg-white/5 p-1 rounded-sm border border-gray-200 dark:border-white/10">
-                                            {(["recent", "views", "likes", "velocity", "engagement", "comments", "score"] as const).map(sort => (
-                           <div key={sort} className="relative group">
-                             <button 
-                               onClick={() => setVideoSort(sort)}
-                               title={`${sortDescriptions[sort].desc} ${sortDescriptions[sort].impact}`} className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${videoSort === sort ? "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-300"}`}
-                             >
-                               {sort}
-                             </button>
-                             
-                           </div>
-                        ))}
+                  <div className="flex items-center gap-4">
+                    <div className="flex bg-white dark:bg-white/5 p-1 rounded-sm border border-gray-200 dark:border-white/10">
+                       <button onClick={() => setVideoType("all")} className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${videoType === "all" ? "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-300"}`}>All</button>
+                       <button onClick={() => setVideoType("shorts")} className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${videoType === "shorts" ? "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-300"}`}>Shorts</button>
+                       <button onClick={() => setVideoType("long")} className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${videoType === "long" ? "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-300"}`}>Long-Form</button>
+                    </div>
+                    <div className="flex flex-wrap gap-2 bg-white dark:bg-white/5 p-1 rounded-sm border border-gray-200 dark:border-white/10">
+                                              {(["recent", "views", "likes", "velocity", "engagement", "comments", "score"] as const).map(sort => (
+                             <div key={sort} className="relative group">
+                               <button 
+                                 onClick={() => setVideoSort(sort)}
+                                 title={`${sortDescriptions[sort].desc} ${sortDescriptions[sort].impact}`} className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${videoSort === sort ? "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-300"}`}
+                               >
+                                 {sort}
+                               </button>
+                               
+                             </div>
+                          ))}
+                    </div>
                   </div>
                 </div>
                 <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-2">
@@ -618,33 +725,59 @@ export default function App() {
                     <div className="flex items-center justify-center h-full text-gray-500 font-mono text-xs">No video data available</div>
                   ) : (
                     sortedVideos.map((video: any, idx: number) => (
-                      <a key={video.id} href={`https://www.youtube.com/watch?v=${video.id}`} target="_blank" rel="noreferrer" className="flex items-center gap-4 bg-white dark:bg-black/40 border border-gray-200 dark:border-white/5 hover:border-[#00b300] dark:border-[#00ff00]/50 p-2 rounded transition-all group relative">
-                        <div className="text-xl font-black italic text-gray-600 w-8 text-center group-hover:text-[#00b300] dark:group-hover:text-[#00ff00] transition-colors">{idx + 1}</div>
-                        <div className="w-24 h-14 shrink-0 overflow-hidden rounded border border-gray-200 dark:border-white/10 relative">
-                          <img src={video.snippet.thumbnails?.maxres?.url || video.snippet.thumbnails?.high?.url || video.snippet.thumbnails?.medium?.url || video.snippet.thumbnails?.standard?.url || video.snippet.thumbnails?.default?.url || '' || video.snippet.thumbnails?.standard?.url || video.snippet.thumbnails?.default?.url || ''} className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
-                          <div className="absolute bottom-1 right-1 bg-gray-800 dark:bg-black/80 text-[8px] font-mono text-white px-1 py-0.5 rounded">
-                            {formatDuration(video.contentDetails?.duration)}
+                      <div key={video.id} className="flex flex-col bg-white dark:bg-black/40 border border-gray-200 dark:border-white/5 hover:border-[#00b300] dark:hover:border-[#00ff00]/50 p-2 rounded transition-all group relative">
+                        <div className="flex items-center gap-4">
+                          <div className="text-xl font-black italic text-gray-600 w-8 text-center group-hover:text-[#00b300] dark:group-hover:text-[#00ff00] transition-colors">{idx + 1}</div>
+                          <a href={`https://www.youtube.com/watch?v=${video.id}`} target="_blank" rel="noreferrer" className="w-24 h-14 shrink-0 overflow-hidden rounded border border-gray-200 dark:border-white/10 relative block">
+                            <img src={video.snippet.thumbnails?.maxres?.url || video.snippet.thumbnails?.high?.url || video.snippet.thumbnails?.medium?.url || video.snippet.thumbnails?.standard?.url || video.snippet.thumbnails?.default?.url || ''} className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
+                            <div className="absolute bottom-1 right-1 bg-gray-800 dark:bg-black/80 text-[8px] font-mono text-white px-1 py-0.5 rounded">
+                              {formatDuration(video.contentDetails?.duration)}
+                            </div>
+                          </a>
+                          <div className="flex-1 min-w-0">
+                            <a href={`https://www.youtube.com/watch?v=${video.id}`} target="_blank" rel="noreferrer" className="block text-xs font-bold text-gray-900 dark:text-white truncate hover:underline">{video.snippet.title}</a>
+                            <div className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest"><span className="text-[#00b300] dark:text-[#00ff00] font-bold">{video.snippet.channelTitle}</span> • {formatDistanceToNow(new Date(video.snippet.publishedAt), { addSuffix: true })}</div>
                           </div>
+                          <div className="flex gap-6 pr-4">
+                            <div className="flex flex-col items-end w-16">
+                              <span className="text-[8px] text-gray-500 uppercase tracking-widest font-bold">Velocity</span>
+                              <span className="text-sm font-mono text-gray-900 dark:text-white">{calculateVelocity(video.snippet.publishedAt, Number(video.statistics.viewCount || 0))} <span className="text-[9px] text-gray-500">/hr</span></span>
+                            </div>
+                            <div className="flex flex-col items-end w-16">
+                              <span className="text-[8px] text-gray-500 uppercase tracking-widest font-bold">Views</span>
+                              <span className="text-sm font-mono text-[#00b300] dark:text-[#00ff00]">{Number(video.statistics.viewCount || 0).toLocaleString()}</span>
+                            </div>
+                            <div className="flex flex-col items-end w-16">
+                              <span className="text-[8px] text-gray-500 uppercase tracking-widest font-bold">Likes</span>
+                              <span className="text-sm font-mono text-gray-900 dark:text-white">{Number(video.statistics.likeCount || 0).toLocaleString()}</span>
+                            </div>
+                          </div>
+                          <button onClick={() => handleAnalyzeComments(video.id)} disabled={analyzingVideoId === video.id} className="p-2 border border-gray-200 dark:border-white/20 rounded hover:bg-gray-100 dark:hover:bg-white/10 transition-colors group/btn">
+                             {analyzingVideoId === video.id ? <RefreshCw className="w-4 h-4 animate-spin text-purple-500" /> : <MessageSquare className="w-4 h-4 text-gray-500 group-hover/btn:text-purple-500" />}
+                          </button>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-xs font-bold text-gray-900 dark:text-white truncate">{video.snippet.title}</h4>
-                          <div className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest"><span className="text-[#00b300] dark:text-[#00ff00] font-bold">{video.snippet.channelTitle}</span> • {formatDistanceToNow(new Date(video.snippet.publishedAt), { addSuffix: true })}</div>
-                        </div>
-                        <div className="flex gap-6 pr-4">
-                          <div className="flex flex-col items-end w-16">
-                            <span className="text-[8px] text-gray-500 uppercase tracking-widest font-bold">Velocity</span>
-                            <span className="text-sm font-mono text-gray-900 dark:text-white">{calculateVelocity(video.snippet.publishedAt, Number(video.statistics.viewCount || 0))} <span className="text-[9px] text-gray-500">/hr</span></span>
-                          </div>
-                          <div className="flex flex-col items-end w-16">
-                            <span className="text-[8px] text-gray-500 uppercase tracking-widest font-bold">Views</span>
-                            <span className="text-sm font-mono text-[#00b300] dark:text-[#00ff00]">{Number(video.statistics.viewCount || 0).toLocaleString()}</span>
-                          </div>
-                          <div className="flex flex-col items-end w-16">
-                            <span className="text-[8px] text-gray-500 uppercase tracking-widest font-bold">Likes</span>
-                            <span className="text-sm font-mono text-gray-900 dark:text-white">{Number(video.statistics.likeCount || 0).toLocaleString()}</span>
-                          </div>
-                        </div>
-                      </a>
+                        {videoCommentAnalysis[video.id] && (
+                           <div className="mt-4 p-4 border-t border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 rounded-b text-xs">
+                             <div className="flex items-center gap-2 mb-2 font-bold uppercase tracking-widest text-purple-500">
+                                <Sparkles className="w-3 h-3" /> AI Comment Analysis
+                             </div>
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                               <div>
+                                 <span className="text-[10px] text-gray-500 uppercase font-bold block mb-1">Sentiment Profile</span>
+                                 <div className="font-mono text-gray-900 dark:text-white whitespace-pre-wrap">{videoCommentAnalysis[video.id].sentiment}</div>
+                               </div>
+                               <div>
+                                 <span className="text-[10px] text-gray-500 uppercase font-bold block mb-1">Common Questions & Themes</span>
+                                 <ul className="list-disc pl-4 space-y-1 font-mono text-gray-900 dark:text-white">
+                                    {videoCommentAnalysis[video.id].questions.map((q: string, i: number) => (
+                                      <li key={i}>{q}</li>
+                                    ))}
+                                 </ul>
+                               </div>
+                             </div>
+                           </div>
+                        )}
+                      </div>
                     ))
                   )}
                 </div>
@@ -733,12 +866,29 @@ export default function App() {
 
             {activeView === "ai_insights" && (
               <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-[#00ff00]/30 rounded p-6 flex-1 flex flex-col overflow-hidden relative">
-                <div className="flex justify-between items-center mb-6">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                   <h2 className="text-xs font-black uppercase tracking-widest text-[#00b300] dark:text-[#00ff00] flex items-center gap-2"><Sparkles className="w-4 h-4" /> // AI Intelligence & Opportunities</h2>
-                  <button onClick={handleGenerateAI} disabled={isAILoading} className="px-4 py-2 bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00] border border-transparent dark:border-[#00ff00]/50 hover:bg-[#009900] dark:hover:bg-[#00ff00]/30 transition-colors text-[10px] font-black uppercase tracking-widest rounded flex items-center gap-2 disabled:opacity-50">
-                    {isAILoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
-                    {isAILoading ? "Analyzing Patterns..." : "Generate Fresh Insights"}
-                  </button>
+                  <div className="flex items-center gap-4 w-full sm:w-auto">
+                    {youtubeData?.channels && youtubeData.channels.length > 0 && (
+                       <div className="relative z-10 w-full sm:w-auto">
+                         <select 
+                           value={aiSelectedChannelId} 
+                           onChange={e => setAiSelectedChannelId(e.target.value as string | 'all')}
+                           className="w-full sm:w-auto appearance-none bg-gray-100 dark:bg-black/50 border border-gray-300 dark:border-white/20 text-gray-900 dark:text-white text-xs font-bold uppercase tracking-widest rounded py-2 pl-3 pr-10 focus:outline-none focus:ring-2 focus:ring-[#00ff00]"
+                         >
+                           <option value="all">All Channels</option>
+                           {youtubeData.channels.map((ch: any) => (
+                             <option key={ch.id} value={ch.id}>{ch.snippet.title}</option>
+                           ))}
+                         </select>
+                         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                       </div>
+                    )}
+                    <button onClick={handleGenerateAI} disabled={isAILoading} className="whitespace-nowrap px-4 py-2 bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00] border border-transparent dark:border-[#00ff00]/50 hover:bg-[#009900] dark:hover:bg-[#00ff00]/30 transition-colors text-[10px] font-black uppercase tracking-widest rounded flex items-center gap-2 disabled:opacity-50">
+                      {isAILoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Brain className="w-3 h-3" />}
+                      {isAILoading ? "Analyzing Patterns..." : "Generate Fresh Insights"}
+                    </button>
+                  </div>
                 </div>
                 
                 <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-6">
@@ -870,6 +1020,60 @@ export default function App() {
                        </ResponsiveContainer>
                     </div>
                  </div>
+
+                 {predictiveMilestone && (
+                    <div className="bg-gradient-to-r from-gray-900 to-black border border-purple-500/30 rounded p-6">
+                       <div className="flex justify-between items-center mb-4">
+                          <h2 className="text-xs font-black uppercase tracking-widest text-purple-500 flex items-center gap-2"><Sparkles className="w-4 h-4" /> Predictive Milestone</h2>
+                          <span className="text-[10px] text-gray-500 font-mono">Current Velocity: +{predictiveMilestone.velocity}/week</span>
+                       </div>
+                       <div className="flex items-center gap-6">
+                          <div className="flex-1">
+                             <div className="flex justify-between text-xs font-mono font-bold text-gray-400 mb-2">
+                                <span>{predictiveMilestone.current.toLocaleString()}</span>
+                                <span>{predictiveMilestone.target.toLocaleString()} TARGET</span>
+                             </div>
+                             <div className="h-2 w-full bg-gray-800 rounded-full overflow-hidden">
+                                <div className="h-full bg-purple-500 transition-all duration-1000" style={{ width: `${Math.min(100, Math.max(0, (predictiveMilestone.current / predictiveMilestone.target) * 100))}%` }}></div>
+                             </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                             <div className="text-3xl font-black italic tracking-tighter text-white">{predictiveMilestone.days}</div>
+                             <div className="text-[10px] text-purple-500 uppercase tracking-widest font-bold">Days Away</div>
+                          </div>
+                       </div>
+                       <p className="text-[10px] text-gray-500 font-mono mt-4 border-t border-white/10 pt-4">
+                          "At your current 7-day velocity, you will hit {predictiveMilestone.target.toLocaleString()} subscribers in {predictiveMilestone.days} days."
+                       </p>
+                    </div>
+                 )}
+
+                 {predictiveMilestone && (
+                    <div className="bg-gradient-to-r from-gray-900 to-black border border-purple-500/30 rounded p-6">
+                       <div className="flex justify-between items-center mb-4">
+                          <h2 className="text-xs font-black uppercase tracking-widest text-purple-500 flex items-center gap-2"><Sparkles className="w-4 h-4" /> Predictive Milestone</h2>
+                          <span className="text-[10px] text-gray-500 font-mono">Current Velocity: +{predictiveMilestone.velocity}/week</span>
+                       </div>
+                       <div className="flex items-center gap-6">
+                          <div className="flex-1">
+                             <div className="flex justify-between text-xs font-mono font-bold text-gray-400 mb-2">
+                                <span>{predictiveMilestone.current.toLocaleString()}</span>
+                                <span>{predictiveMilestone.target.toLocaleString()} TARGET</span>
+                             </div>
+                             <div className="h-2 w-full bg-gray-800 rounded-full overflow-hidden">
+                                <div className="h-full bg-purple-500 transition-all duration-1000" style={{ width: `${Math.min(100, Math.max(0, (predictiveMilestone.current / predictiveMilestone.target) * 100))}%` }}></div>
+                             </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                             <div className="text-3xl font-black italic tracking-tighter text-white">{predictiveMilestone.days}</div>
+                             <div className="text-[10px] text-purple-500 uppercase tracking-widest font-bold">Days Away</div>
+                          </div>
+                       </div>
+                       <p className="text-[10px] text-gray-500 font-mono mt-4 border-t border-white/10 pt-4">
+                          "At your current 7-day velocity, you will hit {predictiveMilestone.target.toLocaleString()} subscribers in {predictiveMilestone.days} days."
+                       </p>
+                    </div>
+                 )}
 
                  {/* Demographics & Segmentation */}
                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1003,6 +1207,76 @@ export default function App() {
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+            {activeView === "competitors" && (
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 flex-1 overflow-hidden">
+                 <div className="xl:col-span-8 bg-white dark:bg-white/5 border border-purple-500/30 rounded p-6 flex flex-col overflow-hidden">
+                    <div className="flex justify-between items-center mb-6">
+                      <h2 className="text-xs font-black uppercase tracking-widest text-purple-500">// Competitor Watchlist</h2>
+                      {(!competitorData?.channels || competitorData.channels.length === 0) && (
+                         <button onClick={() => setIsSettingsOpen(true)} className="text-[10px] font-bold uppercase tracking-widest bg-purple-500/20 text-purple-600 dark:text-purple-400 px-3 py-1 rounded hover:bg-purple-500/30">Configure Competitors</button>
+                      )}
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
+                       {(!competitorData?.channels || competitorData.channels.length === 0) ? (
+                          <div className="flex flex-col items-center justify-center h-full text-gray-500 font-mono text-xs">
+                             <Crosshair className="w-8 h-8 mb-4 opacity-50" />
+                             No competitor channels configured.
+                          </div>
+                       ) : (
+                          competitorData.channels.map((channel: any) => {
+                             const channelVideos = competitorData.videos.filter(v => v.snippet.channelId === channel.id);
+                             return (
+                               <div key={channel.id} className="bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-white/10 rounded p-4">
+                                  <div className="flex items-center gap-4 mb-4 border-b border-gray-200 dark:border-white/10 pb-4">
+                                     <img src={channel.snippet.thumbnails?.default?.url} className="w-12 h-12 rounded-full border border-purple-500/50" />
+                                     <div>
+                                        <h3 className="font-bold text-gray-900 dark:text-white">{channel.snippet.title}</h3>
+                                        <div className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">
+                                          {Number(channel.statistics?.subscriberCount || 0).toLocaleString()} Subs • {Number(channel.statistics?.videoCount || 0).toLocaleString()} Videos
+                                        </div>
+                                     </div>
+                                  </div>
+                                  <div className="space-y-2">
+                                     <h4 className="text-[10px] uppercase font-bold text-purple-500 tracking-widest">Recent Activity</h4>
+                                     {channelVideos.slice(0, 3).map((video: any) => (
+                                        <div key={video.id} className="flex items-center justify-between group">
+                                           <a href={`https://www.youtube.com/watch?v=${video.id}`} target="_blank" rel="noreferrer" className="text-xs text-gray-700 dark:text-gray-300 hover:text-purple-500 truncate flex-1 pr-4">
+                                              {video.snippet.title}
+                                           </a>
+                                           <div className="flex items-center gap-4 text-[10px] font-mono text-gray-500">
+                                              <span>{formatDistanceToNow(new Date(video.snippet.publishedAt), { addSuffix: true })}</span>
+                                              <span className="w-16 text-right font-bold text-gray-900 dark:text-white">{Number(video.statistics?.viewCount || 0).toLocaleString()}</span>
+                                           </div>
+                                        </div>
+                                     ))}
+                                  </div>
+                               </div>
+                             );
+                          })
+                       )}
+                    </div>
+                 </div>
+                 
+                 <div className="xl:col-span-4 flex flex-col gap-6">
+                    <div className="bg-white dark:bg-white/5 border border-purple-500/30 rounded p-6 flex-1 overflow-hidden flex flex-col">
+                       <h2 className="text-xs font-black uppercase tracking-widest text-purple-500 mb-6">// Competitor Keyword Stealer</h2>
+                       <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
+                          {competitorTags.length === 0 ? (
+                             <div className="text-gray-500 font-mono text-xs text-center mt-10">No keywords extracted yet.</div>
+                          ) : (
+                             <div className="flex flex-wrap gap-2">
+                                {competitorTags.map((t, i) => (
+                                   <span key={i} className="bg-purple-500/10 text-purple-700 dark:text-purple-400 border border-purple-500/20 px-2 py-1 rounded text-[10px] font-mono font-bold">
+                                      {t.word} ({t.score})
+                                   </span>
+                                ))}
+                             </div>
+                          )}
+                       </div>
+                    </div>
+                 </div>
               </div>
             )}
           </>

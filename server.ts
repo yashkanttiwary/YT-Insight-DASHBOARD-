@@ -38,7 +38,7 @@ async function startServer() {
 
   app.post("/api/ai-insights", async (req, res) => {
     try {
-      const { videos, channels } = req.body;
+      const { videos, channels, selectedChannelId } = req.body;
       const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
@@ -47,13 +47,23 @@ async function startServer() {
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
+      let targetChannels = channels;
+      let targetVideos = videos;
+
+      if (selectedChannelId && selectedChannelId !== 'all') {
+         targetChannels = channels.filter((c: any) => c.id === selectedChannelId);
+         targetVideos = videos.filter((v: any) => v.snippet.channelId === selectedChannelId);
+      }
+
       const prompt = `Analyze the following YouTube channel and video data to provide actionable insights for a creator dashboard.
       
-      Channel Data: ${JSON.stringify(channels)}
-      Recent Videos: ${JSON.stringify(videos?.slice(0, 30))}
+      Channel Data: ${JSON.stringify(targetChannels)}
+      Recent Videos: ${JSON.stringify(targetVideos?.slice(0, 30))}
       
       Provide a JSON object containing:
       {
+         "healthScore": "0-100 score string",
+         "healthSummary": "string describing overall channel health",
          "recommendations": [ { "topic": "string", "length": "string", "style": "string", "reasoning": "string" } ],
          "opportunities": [ { "topic": "string", "searchVolume": "High/Medium/Low", "competition": "High/Medium/Low", "alignment": "string" } ],
          "contentGaps": [ { "niche": "string", "description": "string" } ]
@@ -75,6 +85,51 @@ async function startServer() {
     } catch (error: any) {
       console.error("[AI Insights Error]", error.message);
       res.status(500).json({ error: "Failed to generate AI insights. Please make sure the GEMINI_API_KEY is valid." });
+    }
+  });
+
+  app.post("/api/ai-analyze-comments", async (req, res) => {
+    try {
+      const { comments } = req.body;
+      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      if (!geminiKey) {
+        return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
+      }
+
+      if (!comments || comments.length === 0) {
+        return res.json({ sentiment: "Neutral", sentimentScore: 50, commonQuestions: [], summary: "No comments to analyze." });
+      }
+      
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: geminiKey as string });
+      
+      const prompt = `Analyze the following top comments from a YouTube video:
+      
+      ${JSON.stringify(comments)}
+      
+      Provide a JSON object containing:
+      {
+         "sentimentScore": "number from 0 to 100",
+         "sentiment": "Positive, Negative, or Neutral",
+         "summary": "Overall summary of what people are saying, 1-2 sentences",
+         "commonQuestions": ["list of string questions asked by viewers"]
+      }`;
+      
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        }
+      });
+      
+      let rawText = response.text || "{}";
+      rawText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
+      
+      res.json(JSON.parse(rawText));
+    } catch (error: any) {
+      console.error("[AI Comments Error]", error.message);
+      res.status(500).json({ error: "Failed to generate comment analysis." });
     }
   });
 
