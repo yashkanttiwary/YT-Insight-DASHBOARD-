@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { Settings, RefreshCw, AlertTriangle, TrendingDown, TrendingUp, Activity, Users, Eye, Brain, PieChart as PieChartIcon, Map, Smartphone, Sparkles, Zap, CheckCircle2, Calendar, ChevronDown, MessageSquare, Crosshair } from "lucide-react";
+import { Settings, RefreshCw, AlertTriangle, TrendingDown, TrendingUp, Activity, Users, Eye, Brain, PieChart as PieChartIcon, Map as MapIcon, Smartphone, Sparkles, Zap, CheckCircle2, Calendar, ChevronDown, MessageSquare, Crosshair, ExternalLink } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { checkStatus, fetchYouTubeData, fetchInstagramData, fetchAIInsights, fetchYouTubeCompetitors, fetchVideoComments, analyzeComments } from "./api";
@@ -59,9 +59,11 @@ export default function App() {
     } catch(e) {}
     return "30d";
   });
-  const [activeView, setActiveView] = useState<"global" | "compare" | "videos" | "algorithm" | "ai_insights" | "audience" | "calendar" | "competitors">("global");
+  const [activeView, setActiveView] = useState<"global" | "compare" | "channel_ranking" | "videos" | "algorithm" | "ai_insights" | "audience" | "calendar" | "competitors">("global");
   const [videoSort, setVideoSort] = useState<"recent" | "views" | "likes" | "velocity" | "engagement" | "comments" | "score">("recent");
   const [videoType, setVideoType] = useState<"all" | "shorts" | "long">("all");
+  const [compareTimeframe, setCompareTimeframe] = useState<"week" | "month">("week");
+  const [expandedNotepadChannel, setExpandedNotepadChannel] = useState<string | null>(null);
 
   const [aiInsights, setAiInsights] = useState<any>(null);
   const [isAILoading, setIsAILoading] = useState(false);
@@ -148,13 +150,87 @@ export default function App() {
   }, [selectedAudienceChannelId]);
 
   const sortedCompareChannels = useMemo(() => {
-    if (!youtubeData?.channels) return [];
-    return [...youtubeData.channels].sort((a, b) => {
+    const allChannels = [...(youtubeData?.channels || []), ...(competitorData?.channels || [])];
+    const uniqueChannelsMap = new Map();
+    allChannels.forEach(c => uniqueChannelsMap.set(c.id, c));
+    const uniqueChannels = Array.from(uniqueChannelsMap.values());
+
+    return uniqueChannels.sort((a: any, b: any) => {
       const avgA = Number(a.statistics.viewCount) / Math.max(1, Number(a.statistics.videoCount));
       const avgB = Number(b.statistics.viewCount) / Math.max(1, Number(b.statistics.videoCount));
       return avgB - avgA; // Sort descending
     });
-  }, [youtubeData]);
+  }, [youtubeData, competitorData]);
+
+  const notepadData = useMemo(() => {
+    const allChannels = [...(youtubeData?.channels || []), ...(competitorData?.channels || [])];
+    // Remove duplicates if any (based on id)
+    const uniqueChannelsMap = new Map();
+    allChannels.forEach(c => uniqueChannelsMap.set(c.id, c));
+    const uniqueChannels = Array.from(uniqueChannelsMap.values());
+    
+    const allVideos = [...(youtubeData?.videos || []), ...(competitorData?.videos || [])];
+    const uniqueVideosMap = new Map();
+    allVideos.forEach(v => uniqueVideosMap.set(v.id, v));
+    const uniqueVideos = Array.from(uniqueVideosMap.values());
+
+    const now = new Date().getTime();
+    const currentRangeMs = compareTimeframe === "week" ? 7 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
+    const previousRangeMs = currentRangeMs * 2;
+
+    return uniqueChannels.map((channel: any) => {
+      const channelVids = uniqueVideos.filter((v: any) => v.snippet.channelId === channel.id);
+      
+      const currentVids = channelVids.filter((v: any) => {
+        const diff = now - new Date(v.snippet.publishedAt).getTime();
+        return diff <= currentRangeMs;
+      });
+
+      const previousVids = channelVids.filter((v: any) => {
+        const diff = now - new Date(v.snippet.publishedAt).getTime();
+        return diff > currentRangeMs && diff <= previousRangeMs;
+      });
+
+      const currentViews = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics.viewCount || 0), 0);
+      const previousViews = previousVids.reduce((sum: number, v: any) => sum + Number(v.statistics.viewCount || 0), 0);
+      
+      const currentLikes = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics.likeCount || 0), 0);
+      const currentComments = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics.commentCount || 0), 0);
+      
+      const previousLikes = previousVids.reduce((sum: number, v: any) => sum + Number(v.statistics.likeCount || 0), 0);
+      const previousComments = previousVids.reduce((sum: number, v: any) => sum + Number(v.statistics.commentCount || 0), 0);
+
+      const currentShortsCount = currentVids.filter((v: any) => v._isShort).length;
+      const currentLongsCount = currentVids.length - currentShortsCount;
+
+      const currentShortsViews = currentVids.filter((v: any) => v._isShort).reduce((sum: number, v: any) => sum + Number(v.statistics.viewCount || 0), 0);
+      const currentLongsViews = currentViews - currentShortsViews;
+
+      const currentEngagement = Number(currentViews) > 0 ? ((Number(currentLikes) + Number(currentComments)) / Number(currentViews)) * 100 : 0;
+      const previousEngagement = Number(previousViews) > 0 ? ((Number(previousLikes) + Number(previousComments)) / Number(previousViews)) * 100 : 0;
+
+      const topCurrentVideo = currentVids.sort((a: any, b: any) => Number(b.statistics.viewCount || 0) - Number(a.statistics.viewCount || 0))[0] || null;
+
+      return {
+        channel,
+        currentVids,
+        previousVids,
+        currentViews,
+        previousViews,
+        currentLikes,
+        currentComments,
+        previousLikes,
+        previousComments,
+        currentEngagement,
+        previousEngagement,
+        currentShortsCount,
+        currentLongsCount,
+        currentShortsViews,
+        currentLongsViews,
+        topCurrentVideo
+      };
+    }).sort((a: any, b: any) => b.currentViews - a.currentViews);
+  }, [youtubeData, competitorData, compareTimeframe]);
 
   const predictiveMilestone = useMemo(() => {
     if (!selectedAudienceChannelId || !youtubeData?.channels) return null;
@@ -188,27 +264,9 @@ export default function App() {
     let videos = youtubeData.videos.filter(v => now - new Date(v.snippet.publishedAt).getTime() <= rangeMs);
     
     if (videoType === 'shorts') {
-      videos = videos.filter(v => {
-        const pt = v.contentDetails?.duration || "";
-        const match = pt.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
-        if (!match) return false;
-        const h = parseInt(match[1]) || 0;
-        const m = parseInt(match[2]) || 0;
-        const s = parseInt(match[3]) || 0;
-        const totalSeconds = (h * 3600) + (m * 60) + s;
-        return totalSeconds <= 60;
-      });
+      videos = videos.filter(v => v._isShort);
     } else if (videoType === 'long') {
-      videos = videos.filter(v => {
-        const pt = v.contentDetails?.duration || "";
-        const match = pt.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
-        if (!match) return true;
-        const h = parseInt(match[1]) || 0;
-        const m = parseInt(match[2]) || 0;
-        const s = parseInt(match[3]) || 0;
-        const totalSeconds = (h * 3600) + (m * 60) + s;
-        return totalSeconds > 60;
-      });
+      videos = videos.filter(v => !v._isShort);
     }
 
     return videos.sort((a, b) => {
@@ -245,7 +303,7 @@ export default function App() {
       }
       return 0;
     });
-  }, [youtubeData, videoSort, timeRange]);
+  }, [youtubeData, videoSort, timeRange, videoType]);
 
   const algoStats = useMemo(() => {
     if (!sortedVideos || sortedVideos.length === 0) return { networkScore: "0.0", medianVelocity: 0, avgEngagement: "0.00", bias: "Neutral" };
@@ -486,7 +544,8 @@ export default function App() {
           <>
             <div className="flex items-center gap-6 border-b border-gray-200 dark:border-white/10 mb-6 pb-0 overflow-x-auto custom-scrollbar">
               <button onClick={() => setActiveView('global')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded ${activeView === 'global' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}>Global Grid</button>
-              <button onClick={() => setActiveView('compare')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded ${activeView === 'compare' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}>Channel Compare</button>
+              <button onClick={() => setActiveView('compare')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'compare' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Sparkles className="w-4 h-4" /> Compare Notepad</button>
+              <button onClick={() => setActiveView('channel_ranking')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'channel_ranking' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Activity className="w-4 h-4" /> Channel Ranking</button>
               <button onClick={() => setActiveView('videos')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded ${activeView === 'videos' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}>Video Leaderboard</button>
               <button onClick={() => setActiveView('algorithm')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded ${activeView === 'algorithm' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}>Algorithmic Analysis</button>
               <button onClick={() => setActiveView('ai_insights')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'ai_insights' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Sparkles className="w-4 h-4" /> AI Insights</button>
@@ -649,47 +708,182 @@ export default function App() {
 
             {activeView === "compare" && (
               <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded p-6 flex-1 flex flex-col">
-                <h2 className="text-xs font-black uppercase tracking-widest text-gray-600 dark:text-gray-400 mb-6">// Channel Telemetry Comparison (Ranked by Avg Views/Video)</h2>
-                {(!sortedCompareChannels || sortedCompareChannels.length === 0) ? (
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="text-xs font-black uppercase tracking-widest text-gray-600 dark:text-gray-400">// Compare Notepad</h2>
+                  <div className="flex items-center gap-2">
+                     <button onClick={() => setCompareTimeframe("week")} className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${compareTimeframe === "week" ? "bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00]" : "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-white/20"}`}>WoW</button>
+                     <button onClick={() => setCompareTimeframe("month")} className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${compareTimeframe === "month" ? "bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00]" : "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-white/20"}`}>MoM</button>
+                  </div>
+                </div>
+                {(!notepadData || notepadData.length === 0) ? (
                   <div className="flex-1 flex items-center justify-center text-gray-500 font-mono text-xs">No channel data to compare</div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                    {sortedCompareChannels.map((channel: any, idx: number) => (
-                      <div key={channel.id} className={`${idx === 0 ? "bg-gradient-to-br from-[#00ff00]/10 to-transparent border-[#00b300] dark:border-[#00ff00]" : "bg-white dark:bg-black/40 border-gray-200 dark:border-white/10"} border hover:border-[#00b300] dark:hover:border-[#00ff00]/50 transition-colors rounded p-5 flex flex-col relative overflow-hidden`}>
-                        {idx === 0 && (
-                           <div className="absolute top-0 right-0 bg-[#00b300] dark:bg-[#00ff00] text-white dark:text-black text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-bl-lg z-10 shadow-sm">
-                             Rank #1
+                  <div className="grid grid-cols-1 gap-6 overflow-y-auto custom-scrollbar pr-2 pb-6">
+                    {notepadData.map((data, idx: number) => {
+                       const { channel, currentVids, currentViews, previousViews, currentLikes, previousLikes, currentComments, previousComments, topCurrentVideo, currentShortsCount, currentLongsCount, currentShortsViews, currentLongsViews } = data;
+                       const viewDiff = currentViews - previousViews;
+                       const isViewUp = viewDiff >= 0;
+                       
+                       const isExpanded = expandedNotepadChannel === channel.id;
+                       
+                       return (
+                         <div key={channel.id} className="bg-gray-50 dark:bg-black/20 border border-gray-200 dark:border-white/10 rounded-lg p-5">
+                           <div className="flex flex-col lg:flex-row gap-6">
+                              <div className="flex items-start gap-4 lg:w-1/6">
+                                <img src={(channel.snippet.thumbnails?.high?.url || channel.snippet.thumbnails?.medium?.url || channel.snippet.thumbnails?.default?.url)} className="w-12 h-12 rounded-full border-2 border-gray-200 dark:border-white/10" alt={channel.snippet.title} />
+                                <div>
+                                  <h3 className="text-sm font-bold text-gray-900 dark:text-white line-clamp-2" title={channel.snippet.title}>{channel.snippet.title}</h3>
+                                </div>
+                              </div>
+                              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 border-t lg:border-t-0 lg:border-l border-gray-200 dark:border-white/10 pt-4 lg:pt-0 lg:pl-6">
+                                 <div>
+                                    <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-1">Subscribers</div>
+                                    <div className="font-mono text-lg font-bold text-gray-900 dark:text-white">{Number(channel.statistics.subscriberCount).toLocaleString()}</div>
+                                    <div className="text-[10px] font-bold mt-1 text-[#00b300] dark:text-[#00ff00]" title="Estimated based on 0.5% view conversion rate">
+                                       Est. Gained: {Math.round(currentViews * 0.005) > 0 ? '+' : ''}{Math.round(currentViews * 0.005).toLocaleString()}
+                                    </div>
+                                    <a 
+                                      href={`https://socialblade.com/youtube/channel/${channel.id}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-[10px] font-bold mt-1 text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 hover:underline flex items-center gap-1"
+                                    >
+                                       SocialBlade Stats <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                 </div>
+                                 <div>
+                                    <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-1">Uploads</div>
+                                    <div className="font-mono text-lg font-bold text-gray-900 dark:text-white">{currentVids.length} <span className="text-xs font-sans text-gray-500 font-normal">total</span></div>
+                                    <div className="text-[10px] font-mono mt-1 text-gray-600 dark:text-gray-400">
+                                       <span className="font-bold text-gray-900 dark:text-white">{currentShortsCount}</span> Shorts · <span className="font-bold text-gray-900 dark:text-white">{currentLongsCount}</span> Longs
+                                    </div>
+                                    <button 
+                                      onClick={() => setExpandedNotepadChannel(isExpanded ? null : channel.id)}
+                                      className="mt-2 text-[10px] font-bold uppercase tracking-widest text-[#00b300] dark:text-[#00ff00] hover:underline flex items-center gap-1"
+                                    >
+                                      {isExpanded ? 'Hide Topics' : 'View Topics'}
+                                      <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                    </button>
+                                 </div>
+                                 <div>
+                                    <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-1">Views ({compareTimeframe === 'week' ? '7 Days' : '30 Days'})</div>
+                                    <div className="font-mono text-lg font-bold text-gray-900 dark:text-white">{currentViews.toLocaleString()}</div>
+                                    <div className="text-[10px] font-mono mt-1 text-gray-600 dark:text-gray-400">
+                                       <span className="font-bold text-gray-900 dark:text-white">{currentShortsViews.toLocaleString()}</span> Shorts · <span className="font-bold text-gray-900 dark:text-white">{currentLongsViews.toLocaleString()}</span> Longs
+                                    </div>
+                                    <div className={`text-[10px] font-bold mt-1 ${isViewUp ? 'text-[#00b300] dark:text-[#00ff00]' : 'text-red-500'}`}>
+                                      {isViewUp ? '+' : ''}{viewDiff.toLocaleString()} vs prev
+                                    </div>
+                                 </div>
+                                 <div>
+                                    <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-1">Engagement</div>
+                                    <div className="font-mono text-sm text-gray-900 dark:text-white mb-1">
+                                       Likes: <span className="font-bold">{currentLikes.toLocaleString()}</span>
+                                       <span className={`text-[9px] ml-1 ${currentLikes >= previousLikes ? 'text-[#00b300] dark:text-[#00ff00]' : 'text-red-500'}`}>({currentLikes >= previousLikes ? '+' : ''}{currentLikes - previousLikes})</span>
+                                    </div>
+                                    <div className="font-mono text-sm text-gray-900 dark:text-white">
+                                       Comments: <span className="font-bold">{currentComments.toLocaleString()}</span>
+                                       <span className={`text-[9px] ml-1 ${currentComments >= previousComments ? 'text-[#00b300] dark:text-[#00ff00]' : 'text-red-500'}`}>({currentComments >= previousComments ? '+' : ''}{currentComments - previousComments})</span>
+                                    </div>
+                                 </div>
+                                 <div>
+                                    <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-2">Top Video</div>
+                                    {topCurrentVideo ? (
+                                      <div className="flex gap-3">
+                                        <div className="shrink-0">
+                                          <img src={(topCurrentVideo.snippet.thumbnails?.medium?.url || topCurrentVideo.snippet.thumbnails?.default?.url)} alt="Thumbnail" className="w-16 h-9 sm:w-20 sm:h-12 object-cover rounded border border-gray-200 dark:border-white/10" />
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                          <a href={`https://youtube.com/watch?v=${topCurrentVideo.id}`} target="_blank" rel="noopener noreferrer" className="text-xs text-[#00b300] dark:text-[#00ff00] hover:underline line-clamp-2 font-bold mb-1" title={topCurrentVideo.snippet.title}>
+                                            {topCurrentVideo.snippet.title}
+                                          </a>
+                                          <div className="text-[9px] text-gray-500 font-mono">
+                                            {Number(topCurrentVideo.statistics.viewCount || 0).toLocaleString()} views
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="text-xs text-gray-500 italic">No videos published</div>
+                                    )}
+                                 </div>
+                              </div>
                            </div>
-                        )}
-                        <div className="flex items-center gap-4 mb-5 border-b border-gray-200 dark:border-white/10 pb-4 relative z-0">
-                          <img src={(channel.snippet.thumbnails?.high?.url || channel.snippet.thumbnails?.medium?.url || channel.snippet.thumbnails?.default?.url)} className={`w-12 h-12 rounded-full border-2 ${idx === 0 ? "border-[#00b300] dark:border-[#00ff00]" : "border-gray-200 dark:border-white/10"}`} alt={channel.snippet.title} />
-                          <div className="flex-1 min-w-0 pr-10">
-                            <h3 className="text-sm font-bold text-gray-900 dark:text-white truncate" title={channel.snippet.title}>{channel.snippet.title}</h3>
-                            <span className="text-[9px] text-gray-500 uppercase tracking-widest">YouTube Channel</span>
-                          </div>
-                        </div>
-                        <div className="space-y-4">
-                          <div className="flex justify-between items-end">
-                            <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Subscribers</span>
-                            <span className={`font-mono text-sm font-bold ${idx === 0 ? "text-[#00b300] dark:text-[#00ff00]" : "text-gray-900 dark:text-white"}`}>{Number(channel.statistics.subscriberCount).toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between items-end">
-                            <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Total Views</span>
-                            <span className={`font-mono text-sm font-bold ${idx === 0 ? "text-[#00b300] dark:text-[#00ff00]" : "text-gray-900 dark:text-white"}`}>{Number(channel.statistics.viewCount).toLocaleString()}</span>
-                          </div>
-                          <div className="flex justify-between items-end">
-                            <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Videos</span>
-                            <span className={`font-mono text-sm font-bold ${idx === 0 ? "text-[#00b300] dark:text-[#00ff00]" : "text-gray-900 dark:text-white"}`}>{Number(channel.statistics.videoCount).toLocaleString()}</span>
-                          </div>
-                          <div className={`flex justify-between items-end border-t pt-3 mt-1 ${idx === 0 ? "border-[#00b300]/30 dark:border-[#00ff00]/30" : "border-gray-200 dark:border-white/10"}`}>
-                            <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Avg Views/Video</span>
-                            <span className={`font-mono text-sm font-bold ${idx === 0 ? "text-xl text-[#00b300] dark:text-[#00ff00]" : "text-[#00b300] dark:text-[#00ff00]"}`}>
-                              {Math.round(Number(channel.statistics.viewCount) / Math.max(1, Number(channel.statistics.videoCount))).toLocaleString()}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                           
+                           {isExpanded && currentVids.length > 0 && (
+                              <div className="mt-6 pt-4 border-t border-gray-200 dark:border-white/10">
+                                <h4 className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-4">Published Topics ({currentVids.length})</h4>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                                  {currentVids.map((v: any) => (
+                                    <div key={v.id} className="flex items-start gap-3 p-3 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded">
+                                      <img src={v.snippet.thumbnails?.medium?.url || v.snippet.thumbnails?.default?.url} className="w-16 h-9 object-cover rounded border border-gray-200 dark:border-white/10" alt="Thumbnail" />
+                                      <div className="flex-1 min-w-0">
+                                        <a href={`https://youtube.com/watch?v=${v.id}`} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-gray-900 dark:text-white hover:text-[#00b300] dark:hover:text-[#00ff00] line-clamp-2" title={v.snippet.title}>
+                                          {v.snippet.title}
+                                        </a>
+                                        <div className="mt-1 flex items-center gap-2">
+                                          <span className={`text-[8px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-sm ${v._isShort ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'}`}>
+                                            {v._isShort ? 'Short' : 'Long'}
+                                          </span>
+                                          <span className="text-[9px] text-gray-500 font-mono">{Number(v.statistics.viewCount || 0).toLocaleString()} views</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                           )}
+                         </div>
+                       );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeView === "channel_ranking" && (
+              <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded p-6 flex-1 flex flex-col overflow-hidden">
+                <h2 className="text-xs font-black uppercase tracking-widest text-gray-600 dark:text-gray-400 mb-6">// Channel Ranking</h2>
+                
+                {sortedCompareChannels.length === 0 ? (
+                  <div className="flex-1 flex items-center justify-center text-gray-500 font-mono text-xs">No channels available to rank</div>
+                ) : (
+                  <div className="overflow-y-auto custom-scrollbar pr-2">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-gray-200 dark:border-white/10 text-[10px] uppercase tracking-widest text-gray-500">
+                          <th className="pb-3 font-bold px-2">Rank</th>
+                          <th className="pb-3 font-bold px-2">Channel</th>
+                          <th className="pb-3 font-bold px-2 text-right">Subscribers</th>
+                          <th className="pb-3 font-bold px-2 text-right">Total Views</th>
+                          <th className="pb-3 font-bold px-2 text-right">Avg Views / Video</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedCompareChannels.map((channel: any, idx: number) => {
+                          const avgViews = Number(channel.statistics.viewCount) / Math.max(1, Number(channel.statistics.videoCount));
+                          return (
+                            <tr key={channel.id} className="border-b border-gray-100 dark:border-white/5 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors">
+                              <td className="py-4 px-2 font-mono text-sm text-gray-500">#{idx + 1}</td>
+                              <td className="py-4 px-2">
+                                <div className="flex items-center gap-3">
+                                  <img src={channel.snippet.thumbnails?.default?.url} alt="" className="w-8 h-8 rounded-full border border-gray-200 dark:border-white/10" />
+                                  <span className="font-bold text-gray-900 dark:text-white text-sm">{channel.snippet.title}</span>
+                                </div>
+                              </td>
+                              <td className="py-4 px-2 text-right font-mono text-sm text-gray-900 dark:text-white">
+                                {Number(channel.statistics.subscriberCount).toLocaleString()}
+                              </td>
+                              <td className="py-4 px-2 text-right font-mono text-sm text-gray-900 dark:text-white">
+                                {Number(channel.statistics.viewCount).toLocaleString()}
+                              </td>
+                              <td className="py-4 px-2 text-right font-mono text-sm text-[#00b300] dark:text-[#00ff00] font-bold">
+                                {Math.round(avgViews).toLocaleString()}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>

@@ -133,6 +133,31 @@ async function startServer() {
     }
   });
 
+  app.post("/api/youtube-shorts-check", async (req, res) => {
+    try {
+      const { videoIds } = req.body;
+      if (!Array.isArray(videoIds)) return res.status(400).json({ error: "videoIds must be an array" });
+      
+      const results: Record<string, boolean> = {};
+      
+      await Promise.all(videoIds.map(async (id) => {
+        try {
+          const response = await fetch(`https://www.youtube.com/shorts/${id}`, {
+            method: 'HEAD',
+            redirect: 'manual'
+          });
+          results[id] = response.status === 200;
+        } catch (err) {
+          results[id] = false;
+        }
+      }));
+      
+      res.json(results);
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to check shorts" });
+    }
+  });
+
   app.get("/api/youtube", async (req, res) => {
     try {
       const keys = getKeys(req);

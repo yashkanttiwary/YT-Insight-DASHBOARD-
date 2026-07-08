@@ -177,6 +177,36 @@ export async function fetchYouTubeData(providedKeys?: DashboardKeys) {
     }
   }
 
+  if (videosData.items.length > 0) {
+     try {
+       const ids = videosData.items.map((v: any) => v.id);
+       const chunkedIds = [];
+       for (let i = 0; i < ids.length; i += 50) {
+         chunkedIds.push(ids.slice(i, i + 50));
+       }
+       
+       let shortsMap: Record<string, boolean> = {};
+       for (const chunk of chunkedIds) {
+          const shortsRes = await fetch('/api/youtube-shorts-check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ videoIds: chunk })
+          });
+          if (shortsRes.ok) {
+            const map = await shortsRes.json();
+            shortsMap = { ...shortsMap, ...map };
+          }
+       }
+       
+       videosData.items = videosData.items.map((v: any) => {
+         v._isShort = shortsMap[v.id] || false;
+         return v;
+       });
+     } catch (e) {
+       console.error("Failed to check shorts", e);
+     }
+  }
+
   return {
     channels: channelsDataItems || [],
     videos: videosData.items || []
@@ -304,6 +334,36 @@ export async function fetchYouTubeCompetitors(providedKeys?: DashboardKeys) {
         videosData.items = videosData.items.concat(vData.items || []);
       }
     }
+  }
+
+  if (videosData.items.length > 0) {
+     try {
+       const ids = videosData.items.map((v: any) => v.id);
+       const chunkedIds = [];
+       for (let i = 0; i < ids.length; i += 50) {
+         chunkedIds.push(ids.slice(i, i + 50));
+       }
+       
+       let shortsMap: Record<string, boolean> = {};
+       for (const chunk of chunkedIds) {
+          const shortsRes = await fetch('/api/youtube-shorts-check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ videoIds: chunk })
+          });
+          if (shortsRes.ok) {
+            const map = await shortsRes.json();
+            shortsMap = { ...shortsMap, ...map };
+          }
+       }
+       
+       videosData.items = videosData.items.map((v: any) => {
+         v._isShort = shortsMap[v.id] || false;
+         return v;
+       });
+     } catch (e) {
+       console.error("Failed to check shorts", e);
+     }
   }
 
   return {
