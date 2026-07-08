@@ -39,12 +39,13 @@ async function startServer() {
   app.post("/api/ai-insights", async (req, res) => {
     try {
       const { videos, channels } = req.body;
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server." });
+      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      if (!geminiKey) {
+        return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
       
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       const prompt = `Analyze the following YouTube channel and video data to provide actionable insights for a creator dashboard.
       

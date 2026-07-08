@@ -14,6 +14,7 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
   const [youtubeChannels, setYoutubeChannels] = useState<YouTubeChannelConfig[]>([]);
   const [instagramKey, setInstagramKey] = useState("");
   const [instagramAccounts, setInstagramAccounts] = useState<InstagramAccountConfig[]>([]);
+  const [geminiKey, setGeminiKey] = useState("");
   
   const [displayConfig, setDisplayConfig] = useState<DisplayConfig>({
     theme: 'dark',
@@ -38,6 +39,8 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
         const parsedIg = ig ? JSON.parse(ig) : [];
         setInstagramAccounts(Array.isArray(parsedIg) ? parsedIg : []);
       } catch (e) { setInstagramAccounts([]); }
+
+      setGeminiKey(localStorage.getItem("f1_geminiKey") || "");
 
       try {
         const display = localStorage.getItem("f1_displayConfig");
@@ -94,6 +97,7 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
     localStorage.setItem("f1_instagramKey", instagramKey);
     localStorage.setItem("f1_instagramAccounts", igAccountsString);
     localStorage.setItem("f1_displayConfig", displayString);
+    localStorage.setItem("f1_geminiKey", geminiKey);
 
     // Apply theme immediately
     if (displayConfig?.theme === 'dark') {
@@ -107,7 +111,8 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
       youtubeChannels: validYt,
       instagramKey,
       instagramAccounts: validIg,
-      display: displayConfig
+      display: displayConfig,
+      geminiKey
     });
   };
 
@@ -197,6 +202,14 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
                     <li>Add the <strong>Instagram Graph API</strong> product to your app.</li>
                     <li>Use the Graph API Explorer to generate a User Access Token with <code className="bg-white dark:bg-black/50 px-1 rounded text-gray-700 dark:text-gray-300">instagram_basic</code> and <code className="bg-white dark:bg-black/50 px-1 rounded text-gray-700 dark:text-gray-300">instagram_manage_insights</code> permissions.</li>
                     <li>To find your Business Account ID: Make a request to <code className="bg-white dark:bg-black/50 px-1 rounded text-gray-700 dark:text-gray-300">/me/accounts?fields=instagram_business_account</code>.</li>
+                  </ol>
+                </div>
+                <div className="space-y-2 border-t border-gray-200 dark:border-white/10 pt-4">
+                  <h4 className="font-bold text-gray-900 dark:text-white uppercase font-sans text-[10px] tracking-widest">Gemini API Setup (AI Insights)</h4>
+                  <ol className="list-decimal pl-4 space-y-1">
+                    <li>Go to <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Google AI Studio</a>.</li>
+                    <li>Click <strong>Create API key</strong>.</li>
+                    <li>Copy the generated key and paste it in the Gemini API Connection section below.</li>
                   </ol>
                 </div>
               </div>
@@ -387,6 +400,29 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+          
+          {/* Gemini API Section */}
+          <div className="space-y-4 pt-4">
+            <div className="flex items-center justify-between border-b border-gray-200 dark:border-white/10 pb-2">
+              <h3 className="text-blue-500 font-mono text-sm uppercase tracking-wider font-bold">Gemini API Connection (AI Insights)</h3>
+              {geminiKey && (
+                <button onClick={() => setGeminiKey("")} className="text-xs font-bold text-gray-500 hover:text-red-500 uppercase flex items-center gap-1 transition-colors">
+                  <Unplug className="w-3 h-3" /> Disconnect
+                </button>
+              )}
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-gray-500 mb-1 tracking-widest">API Key (Stored Locally)</label>
+              <input
+                type="password"
+                className="w-full bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-sm px-3 py-2 text-gray-900 dark:text-white font-mono text-sm focus:border-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 transition-all"
+                value={geminiKey}
+                onChange={(e) => setGeminiKey(e.target.value)}
+                placeholder="AIzaSy..."
+              />
+              <p className="text-[10px] text-gray-500 mt-2 font-mono">Leave blank to use the server's default environment key.</p>
             </div>
           </div>
         </div>

@@ -22,6 +22,7 @@ export interface DashboardKeys {
   instagramKey: string;
   instagramAccounts: InstagramAccountConfig[];
   display?: DisplayConfig;
+  geminiKey?: string;
 }
 
 export interface YouTubeStats {

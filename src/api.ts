@@ -6,6 +6,7 @@ function getKeysFromStorage(): DashboardKeys {
     youtubeChannels: [],
     instagramKey: "",
     instagramAccounts: [],
+    geminiKey: "",
   };
 
   try {
@@ -14,12 +15,14 @@ function getKeysFromStorage(): DashboardKeys {
     const igKey = localStorage.getItem("f1_instagramKey");
     const igAccounts = localStorage.getItem("f1_instagramAccounts");
     const displayStr = localStorage.getItem("f1_displayConfig");
+    const geminiKey = localStorage.getItem("f1_geminiKey");
 
     if (ytKey) keys.youtubeKey = ytKey;
     if (ytChannels) keys.youtubeChannels = JSON.parse(ytChannels);
     if (igKey) keys.instagramKey = igKey;
     if (igAccounts) keys.instagramAccounts = JSON.parse(igAccounts);
     if (displayStr) keys.display = JSON.parse(displayStr);
+    if (geminiKey) keys.geminiKey = geminiKey;
   } catch (e) {
     // Ignore parse errors
   }
@@ -202,10 +205,17 @@ export async function fetchInstagramData(providedKeys?: DashboardKeys) {
   return await response.json();
 }
 
-export async function fetchAIInsights(videos: any[], channels: any[]) {
+export async function fetchAIInsights(videos: any[], channels: any[], providedKeys?: DashboardKeys) {
+  const keys = providedKeys || getKeysFromStorage();
+  
+  const headers: any = { "Content-Type": "application/json" };
+  if (keys.geminiKey) {
+    headers["x-gemini-key"] = keys.geminiKey;
+  }
+  
   const res = await fetch("/api/ai-insights", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ videos, channels })
   });
   if (!res.ok) {
