@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { Settings, RefreshCw, AlertTriangle, TrendingDown, TrendingUp, Activity, Users, Eye, Brain, PieChart as PieChartIcon, Map as MapIcon, Smartphone, Sparkles, Zap, CheckCircle2, Calendar, ChevronDown, MessageSquare, Crosshair, ExternalLink } from "lucide-react";
+import { Settings, RefreshCw, AlertTriangle, TrendingDown, TrendingUp, Activity, Users, Eye, Brain, PieChart as PieChartIcon, Map as MapIcon, Smartphone, Sparkles, Zap, CheckCircle2, Calendar, ChevronDown, MessageSquare, Crosshair, ExternalLink, Table as TableIcon, Play } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { checkStatus, fetchYouTubeData, fetchInstagramData, fetchAIInsights, fetchYouTubeCompetitors, fetchVideoComments, analyzeComments } from "./api";
@@ -59,7 +59,8 @@ export default function App() {
     } catch(e) {}
     return "30d";
   });
-  const [activeView, setActiveView] = useState<"global" | "compare" | "channel_ranking" | "videos" | "algorithm" | "ai_insights" | "audience" | "calendar" | "competitors">("global");
+  const [activeView, setActiveView] = useState<"global" | "compare" | "historical_report" | "channel_ranking" | "videos" | "algorithm" | "ai_insights" | "audience" | "calendar" | "competitors">("global");
+  const [hoveredVideo, setHoveredVideo] = useState<{video: any, x: number, y: number} | null>(null);
   const [videoSort, setVideoSort] = useState<"recent" | "views" | "likes" | "velocity" | "engagement" | "comments" | "score">("recent");
   const [videoType, setVideoType] = useState<"all" | "shorts" | "long">("all");
   const [compareTimeframe, setCompareTimeframe] = useState<"week" | "month">("week");
@@ -231,6 +232,88 @@ export default function App() {
       };
     }).sort((a: any, b: any) => b.currentViews - a.currentViews);
   }, [youtubeData, competitorData, compareTimeframe]);
+
+  const [reportTimeframe, setReportTimeframe] = useState<"weekly" | "monthly">("weekly");
+
+  const historicalReportData = useMemo(() => {
+    const allChannels = [...(youtubeData?.channels || []), ...(competitorData?.channels || [])];
+    const uniqueChannelsMap = new Map();
+    allChannels.forEach(c => uniqueChannelsMap.set(c.id, c));
+    const uniqueChannels = Array.from(uniqueChannelsMap.values());
+    
+    const allVideos = [...(youtubeData?.videos || []), ...(competitorData?.videos || [])];
+    const uniqueVideosMap = new Map();
+    allVideos.forEach(v => uniqueVideosMap.set(v.id, v));
+    const uniqueVideos = Array.from(uniqueVideosMap.values());
+
+    const now = new Date();
+    
+    const periods: { name: string, label: string, start: Date, end: Date }[] = [];
+    
+    if (reportTimeframe === 'weekly') {
+      for (let i = 3; i >= 0; i--) {
+        const start = new Date(now.getTime() - (i + 1) * 7 * 24 * 60 * 60 * 1000);
+        const end = new Date(now.getTime() - i * 7 * 24 * 60 * 60 * 1000);
+        
+        const startLabel = start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+        const endLabel = end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+        
+        periods.push({
+          name: `W${4 - i}`,
+          label: `${startLabel} - ${endLabel}`,
+          start,
+          end
+        });
+      }
+    } else {
+      for (let i = 1; i >= 0; i--) {
+        const start = new Date(now.getTime() - (i + 1) * 30 * 24 * 60 * 60 * 1000);
+        const end = new Date(now.getTime() - i * 30 * 24 * 60 * 60 * 1000);
+        
+        const startLabel = start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+        const endLabel = end.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+        
+        periods.push({
+          name: `M${2 - i}`,
+          label: `${startLabel} - ${endLabel}`,
+          start,
+          end
+        });
+      }
+    }
+
+    const channelStats = uniqueChannels.map((channel: any) => {
+      const channelVideos = uniqueVideos.filter((v: any) => v.snippet.channelId === channel.id);
+      
+      const periodStats = periods.map(p => {
+        const vids = channelVideos.filter((v: any) => {
+          const pubDate = new Date(v.snippet.publishedAt);
+          return pubDate >= p.start && pubDate <= p.end;
+        });
+        
+        const shorts = vids.filter((v: any) => v.snippet.title.toLowerCase().includes('#shorts') || v.contentDetails?.duration?.match(/PT[1-5]?[0-9]S/));
+        const longs = vids.filter((v: any) => !shorts.includes(v));
+
+        const views = vids.reduce((sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0), 0);
+        const shortsViews = shorts.reduce((sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0), 0);
+        const longsViews = longs.reduce((sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0), 0);
+
+        const uploads = vids.length;
+        const shortsUploads = shorts.length;
+        const longsUploads = longs.length;
+
+        const estSubs = Math.round(views * 0.005);
+        
+        const topVideo = vids.length > 0 ? vids.reduce((prev: any, current: any) => (Number(prev.statistics?.viewCount || 0) > Number(current.statistics?.viewCount || 0)) ? prev : current) : null;
+
+        return { name: p.name, views, shortsViews, longsViews, uploads, shortsUploads, longsUploads, estSubs, videos: vids, topVideo };
+      });
+      
+      return { channel, periodStats };
+    }).sort((a: any, b: any) => Number(b.channel.statistics.subscriberCount) - Number(a.channel.statistics.subscriberCount));
+    
+    return { periods, channelStats };
+  }, [youtubeData, competitorData, reportTimeframe]);
 
   const predictiveMilestone = useMemo(() => {
     if (!selectedAudienceChannelId || !youtubeData?.channels) return null;
@@ -545,6 +628,7 @@ export default function App() {
             <div className="flex items-center gap-6 border-b border-gray-200 dark:border-white/10 mb-6 pb-0 overflow-x-auto custom-scrollbar">
               <button onClick={() => setActiveView('global')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded ${activeView === 'global' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}>Global Grid</button>
               <button onClick={() => setActiveView('compare')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'compare' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Sparkles className="w-4 h-4" /> Compare Notepad</button>
+              <button onClick={() => setActiveView('historical_report')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'historical_report' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><TableIcon className="w-4 h-4" /> Historical Report</button>
               <button onClick={() => setActiveView('channel_ranking')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'channel_ranking' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Activity className="w-4 h-4" /> Channel Ranking</button>
               <button onClick={() => setActiveView('videos')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded ${activeView === 'videos' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}>Video Leaderboard</button>
               <button onClick={() => setActiveView('algorithm')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded ${activeView === 'algorithm' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}>Algorithmic Analysis</button>
@@ -552,6 +636,15 @@ export default function App() {
               <button onClick={() => setActiveView('audience')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'audience' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Users className="w-4 h-4" /> Audience</button>
               <button onClick={() => setActiveView('calendar')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'calendar' ? 'text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Calendar className="w-4 h-4" /> Calendar</button>
               <button onClick={() => setActiveView('competitors')} className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === 'competitors' ? 'text-purple-500 border-b-2 border-purple-500 -mb-[1px]' : 'text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent'}`}><Crosshair className="w-4 h-4" /> Competitors</button>
+            </div>
+
+            <div className="mb-6 flex flex-wrap items-center gap-4 text-[10px] uppercase tracking-widest font-bold text-gray-500 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 px-4 py-2 rounded-lg">
+              <span className="text-gray-900 dark:text-white border-r border-gray-300 dark:border-white/20 pr-4">Legend</span>
+              <div className="flex items-center gap-1.5" title="Short-form Vertical Video (YouTube Shorts, Reels)"><Zap className="w-3.5 h-3.5 text-[#ff0000]" /> <span>Shorts</span></div>
+              <div className="flex items-center gap-1.5" title="Standard Long-form Video"><Play className="w-3.5 h-3.5 text-blue-500" /> <span>Longs</span></div>
+              <div className="flex items-center gap-1.5" title="AI Generated Insight or Feature"><Sparkles className="w-3.5 h-3.5 text-yellow-500" /> <span>AI / Insight</span></div>
+              <div className="flex items-center gap-1.5" title="Analytics Data Report"><TableIcon className="w-3.5 h-3.5 text-[#00b300] dark:text-[#00ff00]" /> <span>Data</span></div>
+              <div className="flex items-center gap-1.5" title="Velocity or Ranking Metrics"><Activity className="w-3.5 h-3.5 text-[#00b300] dark:text-[#00ff00]" /> <span>Ranking</span></div>
             </div>
 
             {activeView === "global" && (
@@ -703,6 +796,118 @@ export default function App() {
                   </div>
                 </div>
 
+              </div>
+            )}
+
+            {activeView === "historical_report" && (
+              <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded p-6 flex-1 flex flex-col">
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="text-xs font-black uppercase tracking-widest text-gray-600 dark:text-gray-400">// Historical Report</h2>
+                  <div className="flex items-center gap-2">
+                     <button onClick={() => setReportTimeframe("weekly")} className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportTimeframe === "weekly" ? "bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00]" : "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-white/20"}`}>Weekly</button>
+                     <button onClick={() => setReportTimeframe("monthly")} className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportTimeframe === "monthly" ? "bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00]" : "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-white/20"}`}>Monthly</button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto border border-gray-200 dark:border-white/10 rounded custom-scrollbar">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr>
+                        <th className="p-3 border-b border-r border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 text-[10px] font-black uppercase tracking-widest text-gray-500 whitespace-nowrap min-w-[200px]" rowSpan={2}>
+                          Channels
+                        </th>
+                        {historicalReportData.periods.map(p => (
+                          <th key={p.name} className="p-3 border-b border-gray-200 dark:border-white/10 bg-[#00b300]/10 dark:bg-[#00ff00]/10 text-center" colSpan={4}>
+                            <div className="text-[12px] font-black text-gray-900 dark:text-white">{p.name}</div>
+                            <div className="text-[10px] text-gray-600 dark:text-gray-400 font-normal">{p.label}</div>
+                          </th>
+                        ))}
+                      </tr>
+                      <tr>
+                        {historicalReportData.periods.map(p => (
+                          <React.Fragment key={`${p.name}-cols`}>
+                            <th className="p-2 border-b border-l border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 text-[9px] font-bold uppercase tracking-widest text-gray-500 text-center">Uploads</th>
+                            <th className="p-2 border-b border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 text-[9px] font-bold uppercase tracking-widest text-gray-500 text-center">Views</th>
+                            <th className="p-2 border-b border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 text-[9px] font-bold uppercase tracking-widest text-gray-500 text-center">Est. Subs</th>
+                            <th className="p-2 border-b border-r border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-white/5 text-[9px] font-bold uppercase tracking-widest text-gray-500 text-center">Top Video</th>
+                          </React.Fragment>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historicalReportData.channelStats.map((stat, idx) => (
+                        <tr key={stat.channel.id} className={idx % 2 === 0 ? "bg-white dark:bg-transparent" : "bg-gray-50/50 dark:bg-white/[0.02]"}>
+                          <td className="p-3 border-b border-r border-gray-200 dark:border-white/10 font-bold text-gray-900 dark:text-white whitespace-nowrap flex items-center gap-3">
+                            {stat.channel.snippet?.thumbnails?.default?.url && (
+                              <img src={stat.channel.snippet.thumbnails.default.url} alt="" className="w-8 h-8 rounded-full" />
+                            )}
+                            <span className="truncate max-w-[200px]">{stat.channel.snippet?.title || stat.channel.title || 'Unknown Channel'}</span>
+                          </td>
+                          {stat.periodStats.map(p => (
+                            <React.Fragment key={`${stat.channel.id}-${p.name}`}>
+                              <td className="p-3 border-b border-l border-gray-200 dark:border-white/10 text-center text-gray-900 dark:text-white">
+                                <div className="font-mono text-sm">{p.uploads}</div>
+                                {p.uploads > 0 && (
+                                  <div className="text-[9px] text-gray-500 mt-1 flex justify-center gap-2">
+                                    <span title="Shorts" className="flex items-center gap-0.5"><Zap className="w-3 h-3 text-[#ff0000]"/>{p.shortsUploads}</span>
+                                    <span title="Longs" className="flex items-center gap-0.5"><Play className="w-3 h-3 text-blue-500"/>{p.longsUploads}</span>
+                                  </div>
+                                )}
+                              </td>
+                              <td className="p-3 border-b border-gray-200 dark:border-white/10 text-center text-gray-900 dark:text-white">
+                                <div className="font-mono text-sm">{p.views > 0 ? p.views.toLocaleString() : '-'}</div>
+                                {p.views > 0 && (
+                                  <div className="text-[9px] text-gray-500 mt-1 flex flex-col items-center">
+                                    <span title="Shorts Views" className="flex items-center gap-1"><Zap className="w-3 h-3 text-[#ff0000]"/>{p.shortsViews > 0 ? (p.shortsViews > 1000000 ? (p.shortsViews/1000000).toFixed(1) + 'M' : (p.shortsViews/1000).toFixed(1) + 'K') : '0'}</span>
+                                    <span title="Longs Views" className="flex items-center gap-1"><Play className="w-3 h-3 text-blue-500"/>{p.longsViews > 0 ? (p.longsViews > 1000000 ? (p.longsViews/1000000).toFixed(1) + 'M' : (p.longsViews/1000).toFixed(1) + 'K') : '0'}</span>
+                                  </div>
+                                )}
+                              </td>
+                              <td className="p-3 border-b border-gray-200 dark:border-white/10 text-center font-mono text-sm font-bold text-[#00b300] dark:text-[#00ff00]">
+                                {p.estSubs > 0 ? `+${p.estSubs.toLocaleString()}` : '-'}
+                              </td>
+                              <td className="p-3 border-b border-r border-gray-200 dark:border-white/10 text-center relative">
+                                {p.topVideo ? (
+                                  <div 
+                                    className="flex flex-col items-center gap-1 max-w-[120px] mx-auto cursor-pointer group"
+                                    onMouseEnter={(e) => setHoveredVideo({ video: p.topVideo, x: e.clientX, y: e.clientY })}
+                                    onMouseLeave={() => setHoveredVideo(null)}
+                                    onMouseMove={(e) => setHoveredVideo({ video: p.topVideo, x: e.clientX, y: e.clientY })}
+                                  >
+                                    <img src={p.topVideo.snippet?.thumbnails?.medium?.url || p.topVideo.snippet?.thumbnails?.default?.url} className="w-16 h-9 object-cover rounded" alt="" />
+                                    <span className="text-[9px] text-gray-600 dark:text-gray-400 truncate w-full group-hover:text-gray-900 dark:group-hover:text-white transition-colors">{p.topVideo.snippet?.title}</span>
+                                    <span className="text-[9px] font-mono font-bold text-gray-900 dark:text-white">{Number(p.topVideo.statistics?.viewCount || 0).toLocaleString()} views</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400">-</span>
+                                )}
+                              </td>
+                            </React.Fragment>
+                          ))}
+                        </tr>
+                      ))}
+                      {/* Total Row */}
+                      <tr className="bg-gray-100 dark:bg-white/10 font-bold">
+                        <td className="p-3 border-r border-gray-200 dark:border-white/10 text-gray-900 dark:text-white text-right">TOTAL</td>
+                        {historicalReportData.periods.map(p => {
+                          const totalUploads = historicalReportData.channelStats.reduce((sum, stat) => sum + stat.periodStats.find(ps => ps.name === p.name)!.uploads, 0);
+                          const totalViews = historicalReportData.channelStats.reduce((sum, stat) => sum + stat.periodStats.find(ps => ps.name === p.name)!.views, 0);
+                          const totalSubs = historicalReportData.channelStats.reduce((sum, stat) => sum + stat.periodStats.find(ps => ps.name === p.name)!.estSubs, 0);
+                          return (
+                            <React.Fragment key={`total-${p.name}`}>
+                              <td className="p-3 border-l border-gray-200 dark:border-white/10 text-center text-gray-900 dark:text-white font-mono text-sm">{totalUploads}</td>
+                              <td className="p-3 border-gray-200 dark:border-white/10 text-center text-gray-900 dark:text-white font-mono text-sm">{totalViews > 0 ? totalViews.toLocaleString() : '-'}</td>
+                              <td className="p-3 border-gray-200 dark:border-white/10 text-center font-mono text-sm text-[#00b300] dark:text-[#00ff00]">
+                                {totalSubs > 0 ? `+${totalSubs.toLocaleString()}` : '-'}
+                              </td>
+                              <td className="p-3 border-r border-gray-200 dark:border-white/10 text-center">-</td>
+                            </React.Fragment>
+                          );
+                        })}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
@@ -1494,6 +1699,43 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)} 
         onSave={handleSettingsSave} 
       />
+
+      {hoveredVideo && (
+        <div 
+          className="fixed z-[100] bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-white/10 shadow-2xl rounded-lg p-4 w-72 pointer-events-none transform -translate-x-1/2 -translate-y-[110%]"
+          style={{ left: hoveredVideo.x, top: hoveredVideo.y }}
+        >
+          <img src={hoveredVideo.video.snippet?.thumbnails?.high?.url || hoveredVideo.video.snippet?.thumbnails?.medium?.url} className="w-full aspect-video object-cover rounded mb-3 bg-gray-100 dark:bg-white/5" alt="" />
+          <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-3 line-clamp-2 leading-tight">{hoveredVideo.video.snippet?.title}</h4>
+          
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="bg-gray-50 dark:bg-white/5 rounded p-2 border border-gray-200 dark:border-white/5">
+              <div className="text-[9px] uppercase tracking-widest text-gray-500 mb-1">Views</div>
+              <div className="font-mono font-bold text-gray-900 dark:text-white">
+                {Number(hoveredVideo.video.statistics?.viewCount || 0).toLocaleString()}
+              </div>
+            </div>
+            <div className="bg-gray-50 dark:bg-white/5 rounded p-2 border border-gray-200 dark:border-white/5">
+              <div className="text-[9px] uppercase tracking-widest text-gray-500 mb-1">Likes</div>
+              <div className="font-mono font-bold text-gray-900 dark:text-white">
+                {Number(hoveredVideo.video.statistics?.likeCount || 0).toLocaleString()}
+              </div>
+            </div>
+            <div className="bg-gray-50 dark:bg-white/5 rounded p-2 border border-gray-200 dark:border-white/5">
+              <div className="text-[9px] uppercase tracking-widest text-gray-500 mb-1">Comments</div>
+              <div className="font-mono font-bold text-gray-900 dark:text-white">
+                {Number(hoveredVideo.video.statistics?.commentCount || 0).toLocaleString()}
+              </div>
+            </div>
+            <div className="bg-gray-50 dark:bg-white/5 rounded p-2 border border-gray-200 dark:border-white/5">
+              <div className="text-[9px] uppercase tracking-widest text-gray-500 mb-1">Published</div>
+              <div className="font-mono font-bold text-gray-900 dark:text-white text-[10px]">
+                {new Date(hoveredVideo.video.snippet?.publishedAt).toLocaleDateString()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
