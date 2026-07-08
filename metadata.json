@@ -1,0 +1,6 @@
+{
+  "name": "F1 Social Media Dashboard",
+  "description": "F1-inspired performance dashboard for YouTube and Instagram analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
