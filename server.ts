@@ -1,27 +1,36 @@
+import { GoogleGenAI } from "@google/genai";
 import express from "express";
 import path from "path";
 
 
 
 const app = express();
+
+
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 app.use(express.json({ limit: '50mb' }));
 
   // Helper to extract keys either from header (UI settings) or env var
+  const safeParse = (str: string | undefined | null) => {
+    if (!str) return null;
+    try {
+      return JSON.parse(str);
+    } catch (e) {
+      console.error("JSON Parse error for", str);
+      return null;
+    }
+  };
+
   const getKeys = (req: express.Request) => {
     return {
       youtubeKey: req.headers["x-youtube-key"] || process.env.YOUTUBE_API_KEY,
-      youtubeChannels: req.headers["x-youtube-channels"]
-        ? JSON.parse(req.headers["x-youtube-channels"] as string)
-        : process.env.YOUTUBE_CHANNELS_JSON
-        ? JSON.parse(process.env.YOUTUBE_CHANNELS_JSON)
-        : null,
+      youtubeChannels: (req.headers["x-youtube-channels"] && req.headers["x-youtube-channels"] !== "[]")
+        ? safeParse(req.headers["x-youtube-channels"] as string)
+        : safeParse(process.env.YOUTUBE_CHANNELS_JSON),
       instagramKey: req.headers["x-instagram-key"] || process.env.INSTAGRAM_API_KEY,
-      instagramAccounts: req.headers["x-instagram-accounts"]
-        ? JSON.parse(req.headers["x-instagram-accounts"] as string)
-        : process.env.INSTAGRAM_ACCOUNTS_JSON
-        ? JSON.parse(process.env.INSTAGRAM_ACCOUNTS_JSON)
-        : null,
+      instagramAccounts: (req.headers["x-instagram-accounts"] && req.headers["x-instagram-accounts"] !== "[]")
+        ? safeParse(req.headers["x-instagram-accounts"] as string)
+        : safeParse(process.env.INSTAGRAM_ACCOUNTS_JSON),
     };
   };
 
@@ -43,7 +52,7 @@ app.use(express.json({ limit: '50mb' }));
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
       
-      const { GoogleGenAI } = await import("@google/genai");
+      
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       let targetChannels = channels;
@@ -99,7 +108,7 @@ app.use(express.json({ limit: '50mb' }));
         return res.json({ sentiment: "Neutral", sentimentScore: 50, commonQuestions: [], summary: "No comments to analyze." });
       }
       
-      const { GoogleGenAI } = await import("@google/genai");
+      
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       const prompt = `Analyze the following top comments from a YouTube video:
@@ -520,7 +529,7 @@ app.use(express.json({ limit: '50mb' }));
         return res.json({});
       }
       
-      const { GoogleGenAI } = await import("@google/genai");
+      
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       const prompt = `Analyze the following YouTube videos (title and tags) and categorize each into a very specific, precise niche or topic (e.g., instead of just "Gaming", use "Minecraft Survival Multiplayer", or instead of "Tech", use "Mechanical Keyboard Reviews"). Keep the category name to 1-4 words.
