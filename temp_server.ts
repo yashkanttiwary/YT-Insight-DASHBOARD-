@@ -2,10 +2,15 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 
-
 const app = express();
-const PORT = process.env.PORT || 3000;
-app.use(express.json({ limit: '50mb' }));
+const PORT = 3000;
+app.use(express.json({ limit: "50mb" }));
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  app.use(express.json({ limit: '50mb' }));
 
   // Helper to extract keys either from header (UI settings) or env var
   const getKeys = (req: express.Request) => {
@@ -553,9 +558,7 @@ app.use(express.json({ limit: '50mb' }));
   });
 
   // Vite middleware for development
-async function startServer() {
   if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -569,13 +572,9 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+    app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
-if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
-  startServer();
-}
-
-export default app;
+startServer();
