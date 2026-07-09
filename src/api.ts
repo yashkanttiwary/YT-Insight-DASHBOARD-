@@ -2,27 +2,24 @@ import { DashboardKeys, YouTubeStats, InstagramStats } from "./types";
 
 function getKeysFromStorage(): DashboardKeys {
   const keys: DashboardKeys = {
-    youtubeKey: "AIzaSyAkNHRr0C0wYbKK5pJVytMwBnRSDau_GMs",
-    youtubeChannels: [
-      { channel_id: "UCUikVoPsty2bGOCi2fZ_xZw", name: "PW IOI" }
-    ],
-    youtubeCompetitors: [
-      { channel_id: "UCg6n0KpFmhje8kjjBOCRtGg", name: "Kalvium" },
-      { channel_id: "UC-59uyQUy8SeGlCN1fiDweQ", name: "Scaler School of Technology" },
-      { channel_id: "UCqmlyuni9n40AjTnFnlvGBQ", name: "NST" },
-      { channel_id: "UCyPECBwmgdkS1Jv1WEtPeAg", name: "BST" },
-      { channel_id: "UCh74gkhPCTm0wOMP1MeW36A", name: "uGSOT" }
-    ],
+    youtubeKey: "",
+    youtubeChannels: [],
     instagramKey: "",
     instagramAccounts: [],
     geminiKey: "",
   };
   try {
+    const ytKey = localStorage.getItem("f1_youtubeKey");
+    const ytChannels = localStorage.getItem("f1_youtubeChannels");
+    const ytCompetitors = localStorage.getItem("f1_youtubeCompetitors");
     const igKey = localStorage.getItem("f1_instagramKey");
     const igAccounts = localStorage.getItem("f1_instagramAccounts");
     const displayStr = localStorage.getItem("f1_displayConfig");
     const geminiKey = localStorage.getItem("f1_geminiKey");
 
+    if (ytKey) keys.youtubeKey = ytKey;
+    if (ytChannels) keys.youtubeChannels = JSON.parse(ytChannels);
+    if (ytCompetitors) keys.youtubeCompetitors = JSON.parse(ytCompetitors);
     if (igKey) keys.instagramKey = igKey;
     if (igAccounts) keys.instagramAccounts = JSON.parse(igAccounts);
     if (displayStr) keys.display = JSON.parse(displayStr);

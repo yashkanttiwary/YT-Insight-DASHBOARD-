@@ -183,6 +183,7 @@ export default function App() {
   const [compareTimeframe, setCompareTimeframe] = useState<"week" | "month">(
     "week",
   );
+  const [aiCategorizing, setAiCategorizing] = useState(false);
   const [aiCategoriesMap, setAiCategoriesMap] = useState<
     Record<string, string>
   >({});
@@ -197,6 +198,53 @@ export default function App() {
     else toast(message);
   };
 
+  const generateAiCategories = async () => {
+    setAiCategorizing(true);
+    try {
+      const allVideos = [
+        ...(youtubeData?.videos || []),
+        ...(competitorData?.videos || []),
+      ];
+      const geminiKey = localStorage.getItem("f1_geminiKey") || "";
+
+      const response = await fetch("/api/ai-categorize-videos", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-gemini-key": geminiKey,
+        },
+        body: JSON.stringify({
+          videos: allVideos.map((v: any) => ({
+            id: v.id,
+            title: v.snippet?.title,
+            tags: v.snippet?.tags,
+          })),
+        }),
+      });
+
+      if (!response.ok) {
+        let errMsg = "Failed to categorize videos";
+        try {
+          const errData = await response.json();
+          if (errData.error) errMsg = errData.error;
+        } catch (e) {}
+        throw new Error(errMsg);
+      }
+
+      const data = await response.json();
+      setAiCategoriesMap(data);
+      showNotification("Content mix categorized via AI");
+    } catch (error: any) {
+      console.error("Error generating AI categories:", error);
+      showNotification(
+        error.message ||
+          "Failed to generate AI categories. Please ensure your Gemini API key is configured.",
+        "error",
+      );
+    } finally {
+      setAiCategorizing(false);
+    }
+  };
   const [expandedNotepadChannel, setExpandedNotepadChannel] = useState<
     string | null
   >(null);
@@ -462,6 +510,9 @@ export default function App() {
   const [reportTimeframe, setReportTimeframe] = useState<"weekly" | "monthly">(
     "weekly",
   );
+  const [reportVideoFilter, setReportVideoFilter] = useState<"all" | "shorts" | "longs">(
+    "all",
+  );
 
   const historicalReportData = useMemo(() => {
     const allChannels = [
@@ -540,17 +591,19 @@ export default function App() {
         );
 
         const periodStats = periods.map((p) => {
-          const vids = channelVideos.filter((v: any) => {
+          let vids = channelVideos.filter((v: any) => {
             const pubDate = new Date(v.snippet.publishedAt);
             return pubDate >= p.start && pubDate <= p.end;
           });
 
-          const shorts = vids.filter(
-            (v: any) =>
-              v.snippet.title.toLowerCase().includes("#shorts") ||
-              v.contentDetails?.duration?.match(/PT[1-5]?[0-9]S/),
-          );
+          const shorts = vids.filter((v: any) => v._isShort);
           const longs = vids.filter((v: any) => !shorts.includes(v));
+
+          if (reportVideoFilter === "shorts") {
+            vids = shorts;
+          } else if (reportVideoFilter === "longs") {
+            vids = longs;
+          }
 
           const views = vids.reduce(
             (sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0),
@@ -715,7 +768,7 @@ export default function App() {
       );
 
     return { periods, channelStats };
-  }, [youtubeData, competitorData, reportTimeframe, aiCategoriesMap]);
+  }, [youtubeData, competitorData, reportTimeframe, aiCategoriesMap, reportVideoFilter]);
 
   const predictiveMilestone = useMemo(() => {
     if (!selectedAudienceChannelId || !youtubeData?.channels) return null;
@@ -1005,43 +1058,11 @@ export default function App() {
         const ytData = await fetchYouTubeData(keys);
         setYoutubeData(ytData);
 
-        let compData: any = { channels: [], videos: [] };
         try {
-          compData = await fetchYouTubeCompetitors(keys);
+          const compData = await fetchYouTubeCompetitors(keys);
           setCompetitorData(compData);
         } catch (e) {
           console.error("Failed to load competitors", e);
-        }
-        
-        try {
-          const allVideos = [
-            ...(ytData?.videos || []),
-            ...(compData?.videos || []),
-          ];
-          const geminiKey = localStorage.getItem("f1_geminiKey") || "";
-          
-          if (allVideos.length > 0) {
-            const response = await fetch("/api/ai-categorize-videos", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "x-gemini-key": geminiKey,
-              },
-              body: JSON.stringify({
-                videos: allVideos.map((v: any) => ({
-                  id: v.id,
-                  title: v.snippet?.title,
-                  tags: v.snippet?.tags,
-                })),
-              }),
-            });
-            if (response.ok) {
-              const data = await response.json();
-              setAiCategoriesMap(data);
-            }
-          }
-        } catch (e) {
-          console.error("Auto-categorization failed", e);
         }
       }
 
@@ -1086,7 +1107,7 @@ export default function App() {
       <header className="flex items-center justify-between border-b border-gray-200 dark:border-white/10 pb-4 mb-6 px-6 pt-4 sticky top-0 z-40 bg-gray-50 dark:bg-[#0a0a0a]">
         <div className="flex items-center space-x-6">
           <div className="bg-[#ff0000] px-3 py-1 text-xs font-black italic uppercase tracking-tighter text-gray-900 dark:text-white">
-            PW DASHBOARD
+            YT DASHBOARD
           </div>
           <div className="flex flex-col hidden sm:flex">
             <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest leading-none">
@@ -1546,10 +1567,40 @@ export default function App() {
             {activeView === "historical_report" && (
               <div className="bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded p-6 flex-1 flex flex-col">
                 <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-xs font-black uppercase tracking-widest text-gray-600 dark:text-gray-400">
-                    // Historical Report
-                  </h2>
+                  <div className="flex items-center gap-4">
+                    <h2 className="text-xs font-black uppercase tracking-widest text-gray-600 dark:text-gray-400">
+                      // Historical Report
+                    </h2>
+                    <div className="flex items-center gap-1 bg-gray-100 dark:bg-white/5 p-1 rounded-md">
+                      <button
+                        onClick={() => setReportVideoFilter("all")}
+                        className={`px-3 py-1 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportVideoFilter === "all" ? "bg-white text-gray-900 shadow-sm dark:bg-white/20 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+                      >
+                        All
+                      </button>
+                      <button
+                        onClick={() => setReportVideoFilter("shorts")}
+                        className={`px-3 py-1 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportVideoFilter === "shorts" ? "bg-white text-gray-900 shadow-sm dark:bg-white/20 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+                      >
+                        Shorts
+                      </button>
+                      <button
+                        onClick={() => setReportVideoFilter("longs")}
+                        className={`px-3 py-1 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportVideoFilter === "longs" ? "bg-white text-gray-900 shadow-sm dark:bg-white/20 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+                      >
+                        Long Videos
+                      </button>
+                    </div>
+                  </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={generateAiCategories}
+                      disabled={aiCategorizing}
+                      className="px-3 py-1 mr-4 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 hover:bg-purple-200 dark:hover:bg-purple-900/50 flex items-center gap-1 disabled:opacity-50"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      {aiCategorizing ? "Categorizing..." : "AI Categorize"}
+                    </button>
                     <button
                       onClick={() => setReportTimeframe("weekly")}
                       className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportTimeframe === "weekly" ? "bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00]" : "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-white/20"}`}
@@ -1679,7 +1730,7 @@ export default function App() {
                                 <div className="font-mono text-sm">
                                   {p.uploads}
                                 </div>
-                                {p.uploads > 0 && (
+                                {p.uploads > 0 && reportVideoFilter === "all" && (
                                   <div className="text-[9px] text-gray-500 mt-1 flex justify-center gap-2">
                                     <span
                                       title="Shorts"
@@ -1702,7 +1753,7 @@ export default function App() {
                                 <div className="font-mono text-sm">
                                   {p.views > 0 ? p.views.toLocaleString() : "-"}
                                 </div>
-                                {p.views > 0 && (
+                                {p.views > 0 && reportVideoFilter === "all" && (
                                   <div className="text-[9px] text-gray-500 mt-1 flex flex-col items-center">
                                     <span
                                       title="Shorts Views"
