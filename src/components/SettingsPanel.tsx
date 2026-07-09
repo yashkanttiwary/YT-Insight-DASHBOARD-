@@ -1,3 +1,4 @@
+import toast from 'react-hot-toast';
 import React, { useState, useEffect } from "react";
 import { Settings, X, Save, Plus, Trash2, Unplug, HelpCircle, ChevronDown, ChevronRight, Monitor, Moon, Sun, Clock, Hash } from "lucide-react";
 import { cn } from "../lib/utils";

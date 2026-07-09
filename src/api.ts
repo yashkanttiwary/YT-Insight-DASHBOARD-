@@ -8,7 +8,6 @@ function getKeysFromStorage(): DashboardKeys {
     instagramAccounts: [],
     geminiKey: "",
   };
-
   try {
     const ytKey = localStorage.getItem("f1_youtubeKey");
     const ytChannels = localStorage.getItem("f1_youtubeChannels");
@@ -28,7 +27,6 @@ function getKeysFromStorage(): DashboardKeys {
   } catch (e) {
     // Ignore parse errors
   }
-
   return keys;
 }
 
@@ -45,331 +43,52 @@ export async function checkStatus(providedKeys?: DashboardKeys) {
 
 export async function fetchYouTubeData(providedKeys?: DashboardKeys) {
   const keys = providedKeys || getKeysFromStorage();
-
   if (!keys.youtubeKey || !keys.youtubeChannels || keys.youtubeChannels.length === 0) {
     throw new Error("Configuration missing");
   }
 
-    // Separate channels into IDs and Handles
-  const validIds = [];
-  const handles = [];
-  for (const c of keys.youtubeChannels) {
-    let rawId = (c.channel_id || "").trim();
-    if (!rawId) continue;
-    
-    // Parse URL
-    if (rawId.includes('youtube.com/') || rawId.includes('youtu.be/')) {
-      const match = rawId.match(/(?:youtube\.com\/(?:@|c\/|user\/|channel\/)|youtu\.be\/)([^/?&]+)/);
-      if (match) {
-        if (rawId.includes('/channel/')) {
-          rawId = match[1];
-        } else if (rawId.includes('/@') || rawId.includes('.com/@')) {
-          rawId = '@' + match[1];
-        } else {
-          rawId = match[1]; // fallback could be username or custom id, handle it as username/handle
-          if (!rawId.startsWith('UC') && !rawId.startsWith('@')) {
-            rawId = '@' + rawId; // mostly custom URLs map to handles these days
-          }
-        }
-      }
+  const res = await fetch("/api/youtube", {
+    headers: {
+      "x-youtube-key": keys.youtubeKey,
+      "x-youtube-channels": JSON.stringify(keys.youtubeChannels),
+      "x-display-config": JSON.stringify(keys.display || {})
     }
+  });
 
-    if (rawId.startsWith("@")) {
-      handles.push(rawId);
-    } else {
-      validIds.push(rawId);
-    }
-  }
-
-  let channelsDataItems = [];
-
-  // 1. Fetch by IDs (batch up to 50)
-  if (validIds.length > 0) {
-    for (let i = 0; i < validIds.length; i += 50) {
-      const chunk = validIds.slice(i, i + 50).join(",");
-      const channelsRes = await fetch(
-        `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&id=${chunk}&key=${keys.youtubeKey}`
-      );
-      if (!channelsRes.ok) {
-        let errorMsg = channelsRes.statusText;
-        try {
-          const errData = await channelsRes.json();
-          if (errData.error?.message) errorMsg = errData.error.message;
-        } catch(e) {}
-        throw new Error(`YouTube API Error: ${errorMsg}`);
-      }
-      const data = await channelsRes.json();
-      if (data.items) {
-        channelsDataItems = channelsDataItems.concat(data.items);
-      }
-    }
-  }
-
-  // 2. Fetch by Handles (one by one, as forHandle doesn't support comma-separated list)
-  for (const handle of handles) {
-    const cleanHandle = handle.replace("@", "");
-    const handleRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&forHandle=${cleanHandle}&key=${keys.youtubeKey}`
-    );
-    if (handleRes.ok) {
-      const data = await handleRes.json();
-      if (data.items && data.items.length > 0) {
-        channelsDataItems.push(data.items[0]);
-      } else {
-        // Fallback for legacy usernames
-        const userRes = await fetch(
-          `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&forUsername=${cleanHandle}&key=${keys.youtubeKey}`
-        );
-        if (userRes.ok) {
-           const uData = await userRes.json();
-           if (uData.items && uData.items.length > 0) {
-             channelsDataItems.push(uData.items[0]);
-           }
-        }
-      }
-    }
-  }
-
-  const uploadsPlaylists = channelsDataItems.map((item) => item.contentDetails?.relatedPlaylists?.uploads).filter(Boolean) || [];
-  
-  let videoLimit = keys.display?.videoLimit || 50;
-  let videoIds: string[] = [];
-
-  await Promise.all(uploadsPlaylists.map(async (playlistId: string) => {
-    let nextPageToken = "";
-    let fetchedCount = 0;
-    
-    while (fetchedCount < videoLimit) {
-      const fetchCount = Math.min(50, videoLimit - fetchedCount);
-      const pageTokenParam = nextPageToken ? `&pageToken=${nextPageToken}` : "";
-      
-      const playlistRes = await fetch(
-        `https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=${fetchCount}&playlistId=${playlistId}&key=${keys.youtubeKey}${pageTokenParam}`
-      );
-      
-      if (!playlistRes.ok) break;
-      
-      const playlistData = await playlistRes.json();
-      const ids = playlistData.items?.map((item: any) => item.contentDetails?.videoId).filter(Boolean) || [];
-      videoIds = videoIds.concat(ids);
-      fetchedCount += ids.length;
-      
-      nextPageToken = playlistData.nextPageToken;
-      if (!nextPageToken) break;
-    }
-  }));
-
-  let videosData = { items: [] as any[] };
-  if (videoIds.length > 0) {
-    const chunkedIds = [];
-    for (let i = 0; i < videoIds.length; i += 50) {
-      chunkedIds.push(videoIds.slice(i, i + 50));
-    }
-    
-    for (const chunk of chunkedIds) {
-      const videosRes = await fetch(
-        `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${chunk.join(',')}&key=${keys.youtubeKey}`
-      );
-      if (videosRes.ok) {
-        const vData = await videosRes.json();
-        videosData.items = videosData.items.concat(vData.items || []);
-      }
-    }
-  }
-
-  if (videosData.items.length > 0) {
+  if (!res.ok) {
+     let errorMessage = "Failed to fetch YouTube data";
      try {
-       const ids = videosData.items.map((v: any) => v.id);
-       const chunkedIds = [];
-       for (let i = 0; i < ids.length; i += 50) {
-         chunkedIds.push(ids.slice(i, i + 50));
-       }
-       
-       let shortsMap: Record<string, boolean> = {};
-       for (const chunk of chunkedIds) {
-          const shortsRes = await fetch('/api/youtube-shorts-check', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ videoIds: chunk })
-          });
-          if (shortsRes.ok) {
-            const map = await shortsRes.json();
-            shortsMap = { ...shortsMap, ...map };
-          }
-       }
-       
-       videosData.items = videosData.items.map((v: any) => {
-         v._isShort = shortsMap[v.id] || false;
-         return v;
-       });
-     } catch (e) {
-       console.error("Failed to check shorts", e);
-     }
+       const data = await res.json();
+       if (data.error) errorMessage = data.error;
+     } catch (e) {}
+     throw new Error(errorMessage);
   }
-
-  return {
-    channels: channelsDataItems || [],
-    videos: videosData.items || []
-  };
+  return res.json();
 }
 
 export async function fetchYouTubeCompetitors(providedKeys?: DashboardKeys) {
   const keys = providedKeys || getKeysFromStorage();
-
   if (!keys.youtubeKey || !keys.youtubeCompetitors || keys.youtubeCompetitors.length === 0) {
     return { channels: [], videos: [] };
   }
 
-  const validIds = [];
-  const handles = [];
-  for (const c of keys.youtubeCompetitors) {
-    let rawId = (c.channel_id || "").trim();
-    if (!rawId) continue;
-    
-    if (rawId.includes('youtube.com/') || rawId.includes('youtu.be/')) {
-      const match = rawId.match(/(?:youtube\.com\/(?:@|c\/|user\/|channel\/)|youtu\.be\/)([^/?&]+)/);
-      if (match) {
-        if (rawId.includes('/channel/')) {
-          rawId = match[1];
-        } else if (rawId.includes('/@') || rawId.includes('.com/@')) {
-          rawId = '@' + match[1];
-        } else {
-          rawId = match[1]; 
-          if (!rawId.startsWith('UC') && !rawId.startsWith('@')) {
-            rawId = '@' + rawId;
-          }
-        }
-      }
+  const res = await fetch("/api/youtube-competitors", {
+    headers: {
+      "x-youtube-key": keys.youtubeKey,
+      "x-youtube-competitors": JSON.stringify(keys.youtubeCompetitors),
+      "x-display-config": JSON.stringify(keys.display || {})
     }
+  });
 
-    if (rawId.startsWith("@")) {
-      handles.push(rawId);
-    } else {
-      validIds.push(rawId);
-    }
-  }
-
-  let channelsDataItems = [];
-
-  if (validIds.length > 0) {
-    for (let i = 0; i < validIds.length; i += 50) {
-      const chunk = validIds.slice(i, i + 50).join(",");
-      const channelsRes = await fetch(
-        `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&id=${chunk}&key=${keys.youtubeKey}`
-      );
-      if (channelsRes.ok) {
-        const data = await channelsRes.json();
-        if (data.items) {
-          channelsDataItems = channelsDataItems.concat(data.items);
-        }
-      }
-    }
-  }
-
-  for (const handle of handles) {
-    const cleanHandle = handle.replace("@", "");
-    const handleRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&forHandle=${cleanHandle}&key=${keys.youtubeKey}`
-    );
-    if (handleRes.ok) {
-      const data = await handleRes.json();
-      if (data.items && data.items.length > 0) {
-        channelsDataItems.push(data.items[0]);
-      } else {
-        const userRes = await fetch(
-          `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&forUsername=${cleanHandle}&key=${keys.youtubeKey}`
-        );
-        if (userRes.ok) {
-           const uData = await userRes.json();
-           if (uData.items && uData.items.length > 0) {
-             channelsDataItems.push(uData.items[0]);
-           }
-        }
-      }
-    }
-  }
-
-  const uploadsPlaylists = channelsDataItems.map((item) => item.contentDetails?.relatedPlaylists?.uploads).filter(Boolean) || [];
-  
-  let videoLimit = keys.display?.videoLimit || 50;
-  let videoIds: string[] = [];
-
-  await Promise.all(uploadsPlaylists.map(async (playlistId: string) => {
-    let nextPageToken = "";
-    let fetchedCount = 0;
-    
-    while (fetchedCount < videoLimit) {
-      const fetchCount = Math.min(50, videoLimit - fetchedCount);
-      const pageTokenParam = nextPageToken ? `&pageToken=${nextPageToken}` : "";
-      
-      const playlistRes = await fetch(
-        `https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=${fetchCount}&playlistId=${playlistId}&key=${keys.youtubeKey}${pageTokenParam}`
-      );
-      
-      if (!playlistRes.ok) break;
-      
-      const playlistData = await playlistRes.json();
-      const ids = playlistData.items?.map((item: any) => item.contentDetails?.videoId).filter(Boolean) || [];
-      videoIds = videoIds.concat(ids);
-      fetchedCount += ids.length;
-      
-      nextPageToken = playlistData.nextPageToken;
-      if (!nextPageToken) break;
-    }
-  }));
-
-  let videosData = { items: [] as any[] };
-  if (videoIds.length > 0) {
-    const chunkedIds = [];
-    for (let i = 0; i < videoIds.length; i += 50) {
-      chunkedIds.push(videoIds.slice(i, i + 50));
-    }
-    
-    for (const chunk of chunkedIds) {
-      const videosRes = await fetch(
-        `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${chunk.join(',')}&key=${keys.youtubeKey}`
-      );
-      if (videosRes.ok) {
-        const vData = await videosRes.json();
-        videosData.items = videosData.items.concat(vData.items || []);
-      }
-    }
-  }
-
-  if (videosData.items.length > 0) {
+  if (!res.ok) {
+     let errorMessage = "Failed to fetch YouTube competitors data";
      try {
-       const ids = videosData.items.map((v: any) => v.id);
-       const chunkedIds = [];
-       for (let i = 0; i < ids.length; i += 50) {
-         chunkedIds.push(ids.slice(i, i + 50));
-       }
-       
-       let shortsMap: Record<string, boolean> = {};
-       for (const chunk of chunkedIds) {
-          const shortsRes = await fetch('/api/youtube-shorts-check', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ videoIds: chunk })
-          });
-          if (shortsRes.ok) {
-            const map = await shortsRes.json();
-            shortsMap = { ...shortsMap, ...map };
-          }
-       }
-       
-       videosData.items = videosData.items.map((v: any) => {
-         v._isShort = shortsMap[v.id] || false;
-         return v;
-       });
-     } catch (e) {
-       console.error("Failed to check shorts", e);
-     }
+       const data = await res.json();
+       if (data.error) errorMessage = data.error;
+     } catch (e) {}
+     throw new Error(errorMessage);
   }
-
-  return {
-    channels: channelsDataItems || [],
-    videos: videosData.items || []
-  };
+  return res.json();
 }
 
 export async function fetchInstagramData(providedKeys?: DashboardKeys) {
@@ -379,21 +98,22 @@ export async function fetchInstagramData(providedKeys?: DashboardKeys) {
     throw new Error("Configuration missing");
   }
 
-  const accountId = keys.instagramAccounts[0].business_account_id;
-  const response = await fetch(
-    `https://graph.facebook.com/v19.0/${accountId}?fields=followers_count,media_count,name,profile_picture_url&access_token=${keys.instagramKey}`
-  );
-  
-  if (!response.ok) {
-    let errorMsg = response.statusText;
-  try {
-    const errData = await response.json();
-    if (errData.error?.message) errorMsg = errData.error.message;
-  } catch(e) {}
-  throw new Error(`Instagram API Error: ${errorMsg}`);
+  const res = await fetch("/api/instagram", {
+    headers: {
+      "x-instagram-key": keys.instagramKey,
+      "x-instagram-accounts": JSON.stringify(keys.instagramAccounts)
+    }
+  });
+
+  if (!res.ok) {
+     let errorMessage = "Failed to fetch Instagram data";
+     try {
+       const data = await res.json();
+       if (data.error) errorMessage = data.error;
+     } catch (e) {}
+     throw new Error(errorMessage);
   }
-  
-  return await response.json();
+  return res.json();
 }
 
 export async function fetchAIInsights(videos: any[], channels: any[], providedKeys?: DashboardKeys, selectedChannelId?: string) {
@@ -409,6 +129,7 @@ export async function fetchAIInsights(videos: any[], channels: any[], providedKe
     headers,
     body: JSON.stringify({ videos, channels, selectedChannelId })
   });
+
   if (!res.ok) {
      let errorMessage = "Failed to fetch AI insights";
      try {
@@ -426,16 +147,22 @@ export async function fetchVideoComments(videoId: string, providedKeys?: Dashboa
   const keys = providedKeys || getKeysFromStorage();
   if (!keys.youtubeKey) throw new Error("YouTube API key missing");
 
-  const commentsRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId=${videoId}&maxResults=100&key=${keys.youtubeKey}`
-  );
+  const res = await fetch(`/api/youtube-comments?videoId=${videoId}`, {
+    headers: {
+      "x-youtube-key": keys.youtubeKey
+    }
+  });
 
-  if (!commentsRes.ok) {
-    throw new Error(`Failed to fetch comments: ${commentsRes.statusText}`);
+  if (!res.ok) {
+     let errorMessage = "Failed to fetch comments";
+     try {
+       const data = await res.json();
+       if (data.error) errorMessage = data.error;
+     } catch (e) {}
+     throw new Error(errorMessage);
   }
-
-  const data = await commentsRes.json();
-  return data.items?.map((item: any) => item.snippet.topLevelComment.snippet.textDisplay) || [];
+  const data = await res.json();
+  return data.comments || [];
 }
 
 export async function analyzeComments(comments: string[], providedKeys?: DashboardKeys) {
@@ -451,6 +178,7 @@ export async function analyzeComments(comments: string[], providedKeys?: Dashboa
     headers,
     body: JSON.stringify({ comments })
   });
+
   if (!res.ok) {
      let errorMessage = "Failed to analyze comments";
      try {
