@@ -22,19 +22,29 @@ app.use(express.json({ limit: '50mb' }));
   };
 
   const getKeys = (req: express.Request) => {
+    const parseHeader = (header: string | string[] | undefined) => {
+      if (!header || header === "[]") return null;
+      const str = header as string;
+      try {
+        return JSON.parse(decodeURIComponent(str));
+      } catch (e) {
+        return safeParse(str);
+      }
+    };
+
     return {
-      youtubeKey: req.headers["x-youtube-key"] || process.env.YOUTUBE_API_KEY,
-      youtubeChannels: (req.headers["x-youtube-channels"] && req.headers["x-youtube-channels"] !== "[]")
-        ? safeParse(req.headers["x-youtube-channels"] as string)
-        : safeParse(process.env.YOUTUBE_CHANNELS_JSON),
-      instagramKey: req.headers["x-instagram-key"] || process.env.INSTAGRAM_API_KEY,
-      instagramAccounts: (req.headers["x-instagram-accounts"] && req.headers["x-instagram-accounts"] !== "[]")
-        ? safeParse(req.headers["x-instagram-accounts"] as string)
-        : safeParse(process.env.INSTAGRAM_ACCOUNTS_JSON),
+      youtubeKey: req.body?.youtubeKey || req.headers["x-youtube-key"] || process.env.YOUTUBE_API_KEY,
+      youtubeChannels: (req.body?.youtubeChannels && req.body.youtubeChannels.length > 0)
+        ? req.body.youtubeChannels
+        : parseHeader(req.headers["x-youtube-channels"]) || safeParse(process.env.YOUTUBE_CHANNELS_JSON),
+      instagramKey: req.body?.instagramKey || req.headers["x-instagram-key"] || process.env.INSTAGRAM_API_KEY,
+      instagramAccounts: (req.body?.instagramAccounts && req.body.instagramAccounts.length > 0)
+        ? req.body.instagramAccounts
+        : parseHeader(req.headers["x-instagram-accounts"]) || safeParse(process.env.INSTAGRAM_ACCOUNTS_JSON),
     };
   };
 
-  app.get("/api/status", (req, res) => {
+  app.all("/api/status", (req, res) => {
     const keys = getKeys(req);
     res.json({
       configured: {
@@ -47,7 +57,7 @@ app.use(express.json({ limit: '50mb' }));
   app.post("/api/ai-insights", async (req, res) => {
     try {
       const { videos, channels, selectedChannelId } = req.body;
-      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
@@ -99,7 +109,7 @@ app.use(express.json({ limit: '50mb' }));
   app.post("/api/ai-analyze-comments", async (req, res) => {
     try {
       const { comments } = req.body;
-      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
@@ -167,11 +177,18 @@ app.use(express.json({ limit: '50mb' }));
   });
 
   
-  app.get("/api/youtube-competitors", async (req, res) => {
+  app.all("/api/youtube-competitors", async (req, res) => {
     try {
       const keys = getKeys(req);
       const competitorsStr = req.headers["x-youtube-competitors"];
-      const competitors = competitorsStr ? JSON.parse(competitorsStr as string) : [];
+      let competitors = req.body?.youtubeCompetitors || [];
+      if (competitors.length === 0 && competitorsStr) {
+        try {
+          competitors = JSON.parse(decodeURIComponent(competitorsStr as string));
+        } catch (e) {
+          competitors = JSON.parse(competitorsStr as string);
+        }
+      }
       
       if (!keys.youtubeKey || !competitors || competitors.length === 0) {
         return res.json({ channels: [], videos: [] });
@@ -252,8 +269,15 @@ app.use(express.json({ limit: '50mb' }));
       let videoLimit = 50;
       try {
         const displayConfigStr = req.headers["x-display-config"];
-        if (displayConfigStr) {
-           const display = JSON.parse(displayConfigStr as string);
+        if (req.body?.displayConfig) {
+           if (req.body.displayConfig.videoLimit) videoLimit = req.body.displayConfig.videoLimit;
+        } else if (displayConfigStr) {
+           let display: any;
+           try {
+             display = JSON.parse(decodeURIComponent(displayConfigStr as string));
+           } catch(e) {
+             display = JSON.parse(displayConfigStr as string);
+           }
            if (display.videoLimit) videoLimit = display.videoLimit;
         }
       } catch (e) {}
@@ -347,10 +371,10 @@ app.use(express.json({ limit: '50mb' }));
     }
   });
 
-  app.get("/api/youtube-comments", async (req, res) => {
+  app.all("/api/youtube-comments", async (req, res) => {
     try {
       const keys = getKeys(req);
-      const videoId = req.query.videoId;
+      const videoId = req.body?.videoId || req.query.videoId;
       if (!keys.youtubeKey || !videoId) {
         return res.status(400).json({ error: "Missing YouTube Key or videoId" });
       }
@@ -370,7 +394,7 @@ app.use(express.json({ limit: '50mb' }));
     }
   });
 
-  app.get("/api/youtube", async (req, res) => {
+  app.all("/api/youtube", async (req, res) => {
     try {
       const keys = getKeys(req);
       if (!keys.youtubeKey || !keys.youtubeChannels || keys.youtubeChannels.length === 0) {
@@ -395,8 +419,15 @@ app.use(express.json({ limit: '50mb' }));
       let videoLimit = 50;
       try {
         const displayConfigStr = req.headers["x-display-config"] as string;
-        if (displayConfigStr) {
-           const display = JSON.parse(displayConfigStr as string);
+        if (req.body?.displayConfig) {
+           if (req.body.displayConfig.videoLimit) videoLimit = req.body.displayConfig.videoLimit;
+        } else if (displayConfigStr) {
+           let display: any;
+           try {
+             display = JSON.parse(decodeURIComponent(displayConfigStr));
+           } catch (e) {
+             display = JSON.parse(displayConfigStr);
+           }
            if (display.videoLimit) videoLimit = display.videoLimit;
         }
       } catch (e) {
@@ -492,7 +523,7 @@ app.use(express.json({ limit: '50mb' }));
     }
   });
 
-  app.get("/api/instagram", async (req, res) => {
+  app.all("/api/instagram", async (req, res) => {
     try {
       const keys = getKeys(req);
       if (!keys.instagramKey || !keys.instagramAccounts || keys.instagramAccounts.length === 0) {
@@ -521,7 +552,7 @@ app.use(express.json({ limit: '50mb' }));
   app.post("/api/ai-categorize-videos", async (req, res) => {
     try {
       const { videos } = req.body;
-      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }

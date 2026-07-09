@@ -211,9 +211,9 @@ export default function App() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-gemini-key": geminiKey,
         },
         body: JSON.stringify({
+          geminiKey,
           videos: allVideos.map((v: any) => ({
             id: v.id,
             title: v.snippet?.title,
