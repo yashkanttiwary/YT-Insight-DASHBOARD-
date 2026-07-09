@@ -1,10 +1,10 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
+
 
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 app.use(express.json({ limit: '50mb' }));
 
   // Helper to extract keys either from header (UI settings) or env var
@@ -162,7 +162,7 @@ app.use(express.json({ limit: '50mb' }));
     try {
       const keys = getKeys(req);
       const competitorsStr = req.headers["x-youtube-competitors"];
-      const competitors = competitorsStr ? JSON.parse(competitorsStr) : [];
+      const competitors = competitorsStr ? JSON.parse(competitorsStr as string) : [];
       
       if (!keys.youtubeKey || !competitors || competitors.length === 0) {
         return res.json({ channels: [], videos: [] });
@@ -244,7 +244,7 @@ app.use(express.json({ limit: '50mb' }));
       try {
         const displayConfigStr = req.headers["x-display-config"];
         if (displayConfigStr) {
-           const display = JSON.parse(displayConfigStr);
+           const display = JSON.parse(displayConfigStr as string);
            if (display.videoLimit) videoLimit = display.videoLimit;
         }
       } catch (e) {}
@@ -387,7 +387,7 @@ app.use(express.json({ limit: '50mb' }));
       try {
         const displayConfigStr = req.headers["x-display-config"] as string;
         if (displayConfigStr) {
-           const display = JSON.parse(displayConfigStr);
+           const display = JSON.parse(displayConfigStr as string);
            if (display.videoLimit) videoLimit = display.videoLimit;
         }
       } catch (e) {
