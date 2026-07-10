@@ -2949,6 +2949,43 @@ export default function App() {
                           )}
                         </div>
                       </div>
+
+                      {/* Community Posts */}
+                      {aiInsights.communityPosts && aiInsights.communityPosts.length > 0 && (
+                        <div className="mt-6">
+                          <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-3 border-b border-gray-200 dark:border-white/10 pb-2 flex items-center gap-2">
+                            <MessageSquare className="w-3 h-3" />
+                            Community Post Ideas
+                          </h3>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {aiInsights.communityPosts.map(
+                              (post: any, i: number) => (
+                                <div
+                                  key={i}
+                                  className="bg-gray-50 dark:bg-black/40 border border-gray-200 dark:border-white/10 p-4 rounded relative overflow-hidden"
+                                >
+                                  <div className="absolute top-0 left-0 w-1 h-full bg-[#00ff00]/50" />
+                                  <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-2">
+                                    {post.idea}
+                                  </h4>
+                                  {post.pollOptions && post.pollOptions.length > 0 && (
+                                    <div className="mb-3 space-y-1">
+                                      {post.pollOptions.map((opt: string, idx: number) => (
+                                        <div key={idx} className="text-xs bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded px-2 py-1 text-gray-600 dark:text-gray-300">
+                                          ○ {opt}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <p className="text-xs text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-white/10 pt-2 mt-2">
+                                    <span className="font-bold text-gray-700 dark:text-gray-300">Why: </span>{post.reasoning}
+                                  </p>
+                                </div>
+                              ),
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

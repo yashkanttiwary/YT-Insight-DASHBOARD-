@@ -84,7 +84,8 @@ app.use(express.json({ limit: '50mb' }));
          "healthSummary": "string describing overall channel health",
          "recommendations": [ { "topic": "string", "length": "string", "style": "string", "reasoning": "string" } ],
          "opportunities": [ { "topic": "string", "searchVolume": "High/Medium/Low", "competition": "High/Medium/Low", "alignment": "string" } ],
-         "contentGaps": [ { "niche": "string", "description": "string" } ]
+         "contentGaps": [ { "niche": "string", "description": "string" } ],
+         "communityPosts": [ { "idea": "string", "pollOptions": ["option1", "option2"], "reasoning": "string" } ]
       }`;
       
       const response = await ai.models.generateContent({
