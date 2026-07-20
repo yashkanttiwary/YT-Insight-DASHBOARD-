@@ -1331,7 +1331,7 @@ export default function App() {
       if (err.message === "Configuration missing") {
         setIsConfigured({ youtube: false, instagram: false });
       } else {
-        setError(err.message || "Failed to fetch data");
+        setError(err.message || "Failed to fetch data"); toast.error(err.message || "Failed to fetch data");
       }
     } finally {
       setIsLoading(false);
@@ -1371,7 +1371,7 @@ export default function App() {
               className={`text-sm font-mono uppercase ${error ? "text-[#ff0055]" : isLoading ? "text-yellow-400" : "text-[#00b300] dark:text-[#00ff00]"}`}
             >
               ●{" "}
-              {error ? "API ERROR" : isLoading ? "SYNCING" : "LOCAL TEST MODE"}
+              {error ? (error.includes("Error:") ? error : "API ERROR") : isLoading ? "SYNCING" : "LOCAL TEST MODE"}
             </span>
           </div>
         </div>

@@ -590,7 +590,7 @@ app.use(express.json({ limit: '50mb' }));
       });
     } catch (error: any) {
       console.error("[YouTube API Error]", error.message);
-      res.status(500).json({ error: "Failed to fetch YouTube data" });
+      res.status(500).json({ error: "YouTube Error: " + error.message });
     }
   });
 
@@ -616,7 +616,7 @@ app.use(express.json({ limit: '50mb' }));
       res.json(data);
     } catch (error: any) {
       console.error("[Instagram API Error]", error.message);
-      res.status(500).json({ error: "Failed to fetch Instagram data" });
+      res.status(500).json({ error: "Instagram Error: " + error.message });
     }
   });
 
