@@ -31,7 +31,6 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { SettingsPanel } from "./components/SettingsPanel";
-import { storage } from "./lib/storage";
 import {
   checkStatus,
   fetchYouTubeData,
@@ -150,7 +149,7 @@ export default function App() {
   // Community Hub state managers
   const [customCommunityPosts, setCustomCommunityPosts] = useState<any[]>(() => {
     try {
-      const stored = null; /* localStorage removed, loaded async below */
+      const stored = localStorage.getItem("custom_community_posts");
       return stored ? JSON.parse(stored) : [];
     } catch (e) {
       return [];
@@ -159,7 +158,7 @@ export default function App() {
 
   const [userVotes, setUserVotes] = useState<Record<string, number>>(() => {
     try {
-      const stored = null; /* localStorage removed, loaded async below */
+      const stored = localStorage.getItem("community_user_votes");
       return stored ? JSON.parse(stored) : {};
     } catch (e) {
       return {};
@@ -171,7 +170,7 @@ export default function App() {
 
   const [postComments, setPostComments] = useState<Record<string, Array<{author: string, text: string, publishedAt: string}>>>(() => {
     try {
-      const stored = null; /* localStorage removed, loaded async below */
+      const stored = localStorage.getItem("community_post_comments");
       return stored ? JSON.parse(stored) : {};
     } catch (e) {
       return {};
@@ -180,19 +179,19 @@ export default function App() {
 
   useEffect(() => {
     try {
-      storage.set("custom_community_posts", JSON.stringify(customCommunityPosts));
+      localStorage.setItem("custom_community_posts", JSON.stringify(customCommunityPosts));
     } catch (e) {}
   }, [customCommunityPosts]);
 
   useEffect(() => {
     try {
-      storage.set("community_user_votes", JSON.stringify(userVotes));
+      localStorage.setItem("community_user_votes", JSON.stringify(userVotes));
     } catch (e) {}
   }, [userVotes]);
 
   useEffect(() => {
     try {
-      storage.set("community_post_comments", JSON.stringify(postComments));
+      localStorage.setItem("community_post_comments", JSON.stringify(postComments));
     } catch (e) {}
   }, [postComments]);
 
@@ -207,33 +206,10 @@ export default function App() {
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
 
-  useEffect(() => {
-    async function loadData() {
-      const postsStr = await storage.get("custom_community_posts");
-      if (postsStr) setCustomCommunityPosts(JSON.parse(postsStr));
-      
-      const votesStr = await storage.get("community_user_votes");
-      if (votesStr) setUserVotes(JSON.parse(votesStr));
-      
-      const commentsStr = await storage.get("community_post_comments");
-      if (commentsStr) setPostComments(JSON.parse(commentsStr));
-      
-      const displayStr = await storage.get("f1_displayConfig");
-      if (displayStr) {
-        try {
-          const parsed = JSON.parse(displayStr);
-          if (parsed?.timeRange) setTimeRange(parsed.timeRange);
-        } catch(e) {}
-      }
-    }
-    loadData();
-  }, []);
-
-
   // Time range selector state
   const [timeRange, setTimeRange] = useState<"24h" | "7d" | "30d">(() => {
     try {
-      const display = null; /* async loaded */
+      const display = localStorage.getItem("f1_displayConfig");
       if (display && display !== "null" && display !== "undefined") {
         const parsed = JSON.parse(display);
         return parsed?.timeRange || "30d";
@@ -294,7 +270,7 @@ export default function App() {
         ...(youtubeData?.videos || []),
         ...(competitorData?.videos || []),
       ];
-      const geminiKey = (await storage.get("f1_geminiKey")) || "";
+      const geminiKey = localStorage.getItem("f1_geminiKey") || "";
 
       const response = await fetch("/api/ai-categorize-videos", {
         method: "POST",

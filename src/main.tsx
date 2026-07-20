@@ -3,27 +3,22 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { Toaster } from 'react-hot-toast';
-import { storage } from './lib/storage';
 
-
-async function initTheme() {
-  try {
-    const displayConfigStr = await storage.get("f1_displayConfig");
-    if (displayConfigStr) {
-      const displayConfig = JSON.parse(displayConfigStr);
-      if (displayConfig.theme === 'dark') {
-        document.documentElement.classList.add('dark');
-      } else if (displayConfig.theme === 'light') {
-        document.documentElement.classList.remove('dark');
-      }
-    } else {
-      document.documentElement.classList.add('dark'); // default
+try {
+  const displayConfigStr = localStorage.getItem("f1_displayConfig");
+  if (displayConfigStr) {
+    const displayConfig = JSON.parse(displayConfigStr);
+    if (displayConfig.theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else if (displayConfig.theme === 'light') {
+      document.documentElement.classList.remove('dark');
     }
-  } catch (e) {
-    document.documentElement.classList.add('dark');
+  } else {
+    document.documentElement.classList.add('dark'); // default
   }
+} catch (e) {
+  document.documentElement.classList.add('dark');
 }
-initTheme();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
