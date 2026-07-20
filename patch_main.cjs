@@ -1,11 +1,9 @@
-import {StrictMode} from 'react';
-import {createRoot} from 'react-dom/client';
-import App from './App.tsx';
-import './index.css';
-import { Toaster } from 'react-hot-toast';
-import { storage } from './lib/storage';
+const fs = require('fs');
 
+let code = fs.readFileSync('src/main.tsx', 'utf8');
+code = code.replace(/import \{ Toaster \} from 'react-hot-toast';/, "import { Toaster } from 'react-hot-toast';\nimport { storage } from './lib/storage';");
 
+code = code.replace(/try \{\n  const displayConfigStr = localStorage\.getItem\("f1_displayConfig"\);[^]*?\}\n\ncreateRoot/m, `
 async function initTheme() {
   try {
     const displayConfigStr = await storage.get("f1_displayConfig");
@@ -25,9 +23,6 @@ async function initTheme() {
 }
 initTheme();
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-    <Toaster position="bottom-right" />
-  </StrictMode>,
-);
+createRoot`);
+
+fs.writeFileSync('src/main.tsx', code);

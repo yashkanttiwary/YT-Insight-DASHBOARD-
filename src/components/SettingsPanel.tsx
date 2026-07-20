@@ -1,5 +1,6 @@
 import toast from 'react-hot-toast';
 import React, { useState, useEffect } from "react";
+import { storage } from "../lib/storage";
 import { Settings, X, Save, Plus, Trash2, Unplug, HelpCircle, ChevronDown, ChevronRight, Monitor, Moon, Sun, Clock, Hash } from "lucide-react";
 import { cn } from "../lib/utils";
 import type { DashboardKeys, YouTubeChannelConfig, InstagramAccountConfig, DisplayConfig } from "../types";
@@ -27,31 +28,32 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
   const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
+  async function loadData() {
     if (isOpen) {
-      setYoutubeKey(localStorage.getItem("f1_youtubeKey") || "");
+      setYoutubeKey((await storage.get("f1_youtubeKey")) || "");
       try {
-        const yt = localStorage.getItem("f1_youtubeChannels");
+        const yt = await storage.get("f1_youtubeChannels");
         const parsedYt = yt ? JSON.parse(yt) : [];
         setYoutubeChannels(Array.isArray(parsedYt) ? parsedYt : []);
       } catch (e) { setYoutubeChannels([]); }
 
       try {
-        const ytc = localStorage.getItem("f1_youtubeCompetitors");
+        const ytc = await storage.get("f1_youtubeCompetitors");
         const parsedYtc = ytc ? JSON.parse(ytc) : [];
         setYoutubeCompetitors(Array.isArray(parsedYtc) ? parsedYtc : []);
       } catch (e) { setYoutubeCompetitors([]); }
 
-      setInstagramKey(localStorage.getItem("f1_instagramKey") || "");
+      setInstagramKey((await storage.get("f1_instagramKey")) || "");
       try {
-        const ig = localStorage.getItem("f1_instagramAccounts");
+        const ig = await storage.get("f1_instagramAccounts");
         const parsedIg = ig ? JSON.parse(ig) : [];
         setInstagramAccounts(Array.isArray(parsedIg) ? parsedIg : []);
       } catch (e) { setInstagramAccounts([]); }
 
-      setGeminiKey(localStorage.getItem("f1_geminiKey") || "");
+      setGeminiKey((await storage.get("f1_geminiKey")) || "");
 
       try {
-        const display = localStorage.getItem("f1_displayConfig");
+        const display = await storage.get("f1_displayConfig");
         if (display && display !== "null" && display !== "undefined") {
           const parsedDisplay = JSON.parse(display);
           if (parsedDisplay && typeof parsedDisplay === 'object') {
@@ -60,13 +62,18 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
         }
       } catch (e) { }
     }
+  }
+  loadData();
   }, [isOpen]);
 
   const [errorMsg, setErrorMsg] = useState("");
 
+  
+
+
   if (!isOpen) return null;
 
-  const handleSave = () => {
+  const handleSave = async () => {
     // Validation
     let isValid = true;
     let newError = "";
@@ -102,13 +109,13 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
     const igAccountsString = JSON.stringify(validIg);
     const displayString = JSON.stringify(displayConfig);
 
-    localStorage.setItem("f1_youtubeKey", youtubeKey);
-    localStorage.setItem("f1_youtubeChannels", ytChannelsString);
-    localStorage.setItem("f1_youtubeCompetitors", ytCompetitorsString);
-    localStorage.setItem("f1_instagramKey", instagramKey);
-    localStorage.setItem("f1_instagramAccounts", igAccountsString);
-    localStorage.setItem("f1_displayConfig", displayString);
-    localStorage.setItem("f1_geminiKey", geminiKey);
+    await storage.set("f1_youtubeKey", youtubeKey);
+    await storage.set("f1_youtubeChannels", ytChannelsString);
+    await storage.set("f1_youtubeCompetitors", ytCompetitorsString);
+    await storage.set("f1_instagramKey", instagramKey);
+    await storage.set("f1_instagramAccounts", igAccountsString);
+    await storage.set("f1_displayConfig", displayString);
+    await storage.set("f1_geminiKey", geminiKey);
 
     // Apply theme immediately
     if (displayConfig?.theme === 'dark') {

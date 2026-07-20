@@ -1,6 +1,7 @@
 import { DashboardKeys, YouTubeStats, InstagramStats } from "./types";
 
-function getKeysFromStorage(): DashboardKeys {
+export async function getKeysFromStorage(): Promise<DashboardKeys> {
+  const { storage } = await import("./lib/storage");
   const keys: DashboardKeys = {
     youtubeKey: "",
     youtubeChannels: [],
@@ -9,13 +10,13 @@ function getKeysFromStorage(): DashboardKeys {
     geminiKey: "",
   };
   try {
-    const ytKey = localStorage.getItem("f1_youtubeKey");
-    const ytChannels = localStorage.getItem("f1_youtubeChannels");
-    const ytCompetitors = localStorage.getItem("f1_youtubeCompetitors");
-    const igKey = localStorage.getItem("f1_instagramKey");
-    const igAccounts = localStorage.getItem("f1_instagramAccounts");
-    const displayStr = localStorage.getItem("f1_displayConfig");
-    const geminiKey = localStorage.getItem("f1_geminiKey");
+    const ytKey = await storage.get("f1_youtubeKey");
+    const ytChannels = await storage.get("f1_youtubeChannels");
+    const ytCompetitors = await storage.get("f1_youtubeCompetitors");
+    const igKey = await storage.get("f1_instagramKey");
+    const igAccounts = await storage.get("f1_instagramAccounts");
+    const displayStr = await storage.get("f1_displayConfig");
+    const geminiKey = await storage.get("f1_geminiKey");
 
     if (ytKey) keys.youtubeKey = ytKey;
     if (ytChannels) keys.youtubeChannels = JSON.parse(ytChannels);
@@ -31,7 +32,7 @@ function getKeysFromStorage(): DashboardKeys {
 }
 
 export async function checkStatus(providedKeys?: DashboardKeys) {
-  const keys = providedKeys || getKeysFromStorage();
+  const keys = providedKeys || await getKeysFromStorage();
   
   try {
     const res = await fetch("/api/status", {
@@ -61,7 +62,7 @@ export async function checkStatus(providedKeys?: DashboardKeys) {
 }
 
 export async function fetchYouTubeData(providedKeys?: DashboardKeys) {
-  const keys = providedKeys || getKeysFromStorage();
+  const keys = providedKeys || await getKeysFromStorage();
 
   const res = await fetch("/api/youtube", {
     method: "POST",
@@ -85,7 +86,7 @@ export async function fetchYouTubeData(providedKeys?: DashboardKeys) {
 }
 
 export async function fetchYouTubeCompetitors(providedKeys?: DashboardKeys) {
-  const keys = providedKeys || getKeysFromStorage();
+  const keys = providedKeys || await getKeysFromStorage();
 
   const res = await fetch("/api/youtube-competitors", {
     method: "POST",
@@ -109,7 +110,7 @@ export async function fetchYouTubeCompetitors(providedKeys?: DashboardKeys) {
 }
 
 export async function fetchInstagramData(providedKeys?: DashboardKeys) {
-  const keys = providedKeys || getKeysFromStorage();
+  const keys = providedKeys || await getKeysFromStorage();
 
   const res = await fetch("/api/instagram", {
     method: "POST",
@@ -132,7 +133,7 @@ export async function fetchInstagramData(providedKeys?: DashboardKeys) {
 }
 
 export async function fetchAIInsights(videos: any[], channels: any[], providedKeys?: DashboardKeys, selectedChannelId?: string) {
-  const keys = providedKeys || getKeysFromStorage();
+  const keys = providedKeys || await getKeysFromStorage();
   
   const headers: any = { "Content-Type": "application/json" };
   
@@ -156,7 +157,7 @@ export async function fetchAIInsights(videos: any[], channels: any[], providedKe
 }
 
 export async function fetchVideoComments(videoId: string, providedKeys?: DashboardKeys) {
-  const keys = providedKeys || getKeysFromStorage();
+  const keys = providedKeys || await getKeysFromStorage();
   if (!keys.youtubeKey) throw new Error("YouTube API key missing");
 
   const res = await fetch(`/api/youtube-comments`, {
@@ -181,7 +182,7 @@ export async function fetchVideoComments(videoId: string, providedKeys?: Dashboa
 }
 
 export async function analyzeComments(comments: string[], providedKeys?: DashboardKeys) {
-  const keys = providedKeys || getKeysFromStorage();
+  const keys = providedKeys || await getKeysFromStorage();
   
   const headers: any = { "Content-Type": "application/json" };
   
