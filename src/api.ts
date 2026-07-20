@@ -33,25 +33,6 @@ function getKeysFromStorage(): DashboardKeys {
 export async function checkStatus(providedKeys?: DashboardKeys) {
   const keys = providedKeys || getKeysFromStorage();
   
-  try {
-    const res = await fetch("/api/status", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        youtubeKey: keys.youtubeKey || "",
-        youtubeChannels: keys.youtubeChannels || [],
-        instagramKey: keys.instagramKey || "",
-        instagramAccounts: keys.instagramAccounts || []
-      })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      return data;
-    }
-  } catch (e) {
-    console.error("Failed to fetch status from backend", e);
-  }
-
   return {
     configured: {
       youtube: !!(keys.youtubeKey && keys.youtubeChannels && keys.youtubeChannels.length > 0),
@@ -62,15 +43,16 @@ export async function checkStatus(providedKeys?: DashboardKeys) {
 
 export async function fetchYouTubeData(providedKeys?: DashboardKeys) {
   const keys = providedKeys || getKeysFromStorage();
+  if (!keys.youtubeKey || !keys.youtubeChannels || keys.youtubeChannels.length === 0) {
+    throw new Error("Configuration missing");
+  }
 
   const res = await fetch("/api/youtube", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      youtubeKey: keys.youtubeKey || "",
-      youtubeChannels: keys.youtubeChannels || [],
-      displayConfig: keys.display || {}
-    })
+    headers: {
+      "x-youtube-key": keys.youtubeKey,
+      "x-youtube-channels": JSON.stringify(keys.youtubeChannels),
+      "x-display-config": JSON.stringify(keys.display || {})
+    }
   });
 
   if (!res.ok) {
@@ -86,15 +68,16 @@ export async function fetchYouTubeData(providedKeys?: DashboardKeys) {
 
 export async function fetchYouTubeCompetitors(providedKeys?: DashboardKeys) {
   const keys = providedKeys || getKeysFromStorage();
+  if (!keys.youtubeKey || !keys.youtubeCompetitors || keys.youtubeCompetitors.length === 0) {
+    return { channels: [], videos: [] };
+  }
 
   const res = await fetch("/api/youtube-competitors", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      youtubeKey: keys.youtubeKey || "",
-      youtubeCompetitors: keys.youtubeCompetitors || [],
-      displayConfig: keys.display || {}
-    })
+    headers: {
+      "x-youtube-key": keys.youtubeKey,
+      "x-youtube-competitors": JSON.stringify(keys.youtubeCompetitors),
+      "x-display-config": JSON.stringify(keys.display || {})
+    }
   });
 
   if (!res.ok) {
@@ -110,14 +93,16 @@ export async function fetchYouTubeCompetitors(providedKeys?: DashboardKeys) {
 
 export async function fetchInstagramData(providedKeys?: DashboardKeys) {
   const keys = providedKeys || getKeysFromStorage();
+  
+  if (!keys.instagramKey || !keys.instagramAccounts || keys.instagramAccounts.length === 0) {
+    throw new Error("Configuration missing");
+  }
 
   const res = await fetch("/api/instagram", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      instagramKey: keys.instagramKey || "",
-      instagramAccounts: keys.instagramAccounts || []
-    })
+    headers: {
+      "x-instagram-key": keys.instagramKey,
+      "x-instagram-accounts": JSON.stringify(keys.instagramAccounts)
+    }
   });
 
   if (!res.ok) {
@@ -135,11 +120,14 @@ export async function fetchAIInsights(videos: any[], channels: any[], providedKe
   const keys = providedKeys || getKeysFromStorage();
   
   const headers: any = { "Content-Type": "application/json" };
+  if (keys.geminiKey) {
+    headers["x-gemini-key"] = keys.geminiKey;
+  }
   
   const res = await fetch("/api/ai-insights", {
     method: "POST",
     headers,
-    body: JSON.stringify({ videos, channels, selectedChannelId, geminiKey: keys.geminiKey || "" })
+    body: JSON.stringify({ videos, channels, selectedChannelId })
   });
 
   if (!res.ok) {
@@ -159,13 +147,10 @@ export async function fetchVideoComments(videoId: string, providedKeys?: Dashboa
   const keys = providedKeys || getKeysFromStorage();
   if (!keys.youtubeKey) throw new Error("YouTube API key missing");
 
-  const res = await fetch(`/api/youtube-comments`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      youtubeKey: keys.youtubeKey,
-      videoId
-    })
+  const res = await fetch(`/api/youtube-comments?videoId=${videoId}`, {
+    headers: {
+      "x-youtube-key": keys.youtubeKey
+    }
   });
 
   if (!res.ok) {
@@ -184,11 +169,14 @@ export async function analyzeComments(comments: string[], providedKeys?: Dashboa
   const keys = providedKeys || getKeysFromStorage();
   
   const headers: any = { "Content-Type": "application/json" };
+  if (keys.geminiKey) {
+    headers["x-gemini-key"] = keys.geminiKey;
+  }
   
   const res = await fetch("/api/ai-analyze-comments", {
     method: "POST",
     headers,
-    body: JSON.stringify({ comments, geminiKey: keys.geminiKey || "" })
+    body: JSON.stringify({ comments })
   });
 
   if (!res.ok) {

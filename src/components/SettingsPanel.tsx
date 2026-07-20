@@ -189,23 +189,6 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
           <div className="flex items-center gap-2 text-gray-900 dark:text-white">
             <Settings className="w-4 h-4 text-[#00b300] dark:text-[#00ff00]" />
             <h2 className="text-xs font-black uppercase tracking-widest text-gray-600 dark:text-gray-400">Connection Dashboard</h2>
-            <button
-              onClick={() => {
-                setYoutubeKey("AIzaSyAkNHRr0C0wYbKK5pJVytMwBnRSDau_GMs");
-                setYoutubeChannels([{ name: "Kalvium", channel_id: "UCg6n0KpFmhje8kjjBOCRtGg" }]);
-                setYoutubeCompetitors([
-                  { name: "Scaler School of Technology", channel_id: "UC-59uyQUy8SeGlCNlfiDweQ" },
-                  { name: "NST", channel_id: "UCQmlyuni9n4OAjTnFnlvGBQ" },
-                  { name: "BST", channel_id: "UCyPECBwmgdkS1JvlWEtPeAg" },
-                  { name: "PW IOI", channel_id: "UCUikVoPsty2bGOCi2fZ_xZw" },
-                  { name: "uGSOT", channel_id: "UCh74gkhPCTm0wOMPlMeW36A" }
-                ]);
-                toast.success("Dev mode values loaded!");
-              }}
-              className="ml-4 px-2 py-1 bg-[#00b300]/20 text-[#00b300] dark:bg-[#00ff00]/20 dark:text-[#00ff00] text-[10px] font-bold uppercase tracking-widest rounded hover:bg-[#00b300]/30 dark:hover:bg-[#00ff00]/30 transition-colors"
-            >
-              Load Dev Defaults
-            </button>
           </div>
           <button onClick={onClose} className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
             <X className="w-5 h-5" />

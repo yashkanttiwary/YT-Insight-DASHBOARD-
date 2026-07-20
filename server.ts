@@ -1,50 +1,32 @@
-import { GoogleGenAI } from "@google/genai";
 import express from "express";
 import path from "path";
+import { createServer as createViteServer } from "vite";
 
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
 
-
-const app = express();
-
-
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-app.use(express.json({ limit: '50mb' }));
+  app.use(express.json({ limit: '50mb' }));
 
   // Helper to extract keys either from header (UI settings) or env var
-  const safeParse = (str: string | undefined | null) => {
-    if (!str) return null;
-    try {
-      return JSON.parse(str);
-    } catch (e) {
-      console.error("JSON Parse error for", str);
-      return null;
-    }
-  };
-
   const getKeys = (req: express.Request) => {
-    const parseHeader = (header: string | string[] | undefined) => {
-      if (!header || header === "[]") return null;
-      const str = header as string;
-      try {
-        return JSON.parse(decodeURIComponent(str));
-      } catch (e) {
-        return safeParse(str);
-      }
-    };
-
     return {
-      youtubeKey: req.body?.youtubeKey || req.headers["x-youtube-key"] || process.env.YOUTUBE_API_KEY,
-      youtubeChannels: (req.body?.youtubeChannels && req.body.youtubeChannels.length > 0)
-        ? req.body.youtubeChannels
-        : parseHeader(req.headers["x-youtube-channels"]) || safeParse(process.env.YOUTUBE_CHANNELS_JSON),
-      instagramKey: req.body?.instagramKey || req.headers["x-instagram-key"] || process.env.INSTAGRAM_API_KEY,
-      instagramAccounts: (req.body?.instagramAccounts && req.body.instagramAccounts.length > 0)
-        ? req.body.instagramAccounts
-        : parseHeader(req.headers["x-instagram-accounts"]) || safeParse(process.env.INSTAGRAM_ACCOUNTS_JSON),
+      youtubeKey: req.headers["x-youtube-key"] || process.env.YOUTUBE_API_KEY,
+      youtubeChannels: req.headers["x-youtube-channels"]
+        ? JSON.parse(req.headers["x-youtube-channels"] as string)
+        : process.env.YOUTUBE_CHANNELS_JSON
+        ? JSON.parse(process.env.YOUTUBE_CHANNELS_JSON)
+        : null,
+      instagramKey: req.headers["x-instagram-key"] || process.env.INSTAGRAM_API_KEY,
+      instagramAccounts: req.headers["x-instagram-accounts"]
+        ? JSON.parse(req.headers["x-instagram-accounts"] as string)
+        : process.env.INSTAGRAM_ACCOUNTS_JSON
+        ? JSON.parse(process.env.INSTAGRAM_ACCOUNTS_JSON)
+        : null,
     };
   };
 
-  app.all("/api/status", (req, res) => {
+  app.get("/api/status", (req, res) => {
     const keys = getKeys(req);
     res.json({
       configured: {
@@ -57,12 +39,12 @@ app.use(express.json({ limit: '50mb' }));
   app.post("/api/ai-insights", async (req, res) => {
     try {
       const { videos, channels, selectedChannelId } = req.body;
-      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
       
-      
+      const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       let targetChannels = channels;
@@ -84,8 +66,7 @@ app.use(express.json({ limit: '50mb' }));
          "healthSummary": "string describing overall channel health",
          "recommendations": [ { "topic": "string", "length": "string", "style": "string", "reasoning": "string" } ],
          "opportunities": [ { "topic": "string", "searchVolume": "High/Medium/Low", "competition": "High/Medium/Low", "alignment": "string" } ],
-         "contentGaps": [ { "niche": "string", "description": "string" } ],
-         "communityPosts": [ { "idea": "string", "pollOptions": ["option1", "option2"], "reasoning": "string" } ]
+         "contentGaps": [ { "niche": "string", "description": "string" } ]
       }`;
       
       const response = await ai.models.generateContent({
@@ -110,7 +91,7 @@ app.use(express.json({ limit: '50mb' }));
   app.post("/api/ai-analyze-comments", async (req, res) => {
     try {
       const { comments } = req.body;
-      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
@@ -119,7 +100,7 @@ app.use(express.json({ limit: '50mb' }));
         return res.json({ sentiment: "Neutral", sentimentScore: 50, commonQuestions: [], summary: "No comments to analyze." });
       }
       
-      
+      const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       const prompt = `Analyze the following top comments from a YouTube video:
@@ -178,18 +159,11 @@ app.use(express.json({ limit: '50mb' }));
   });
 
   
-  app.all("/api/youtube-competitors", async (req, res) => {
+  app.get("/api/youtube-competitors", async (req, res) => {
     try {
       const keys = getKeys(req);
       const competitorsStr = req.headers["x-youtube-competitors"];
-      let competitors = req.body?.youtubeCompetitors || [];
-      if (competitors.length === 0 && competitorsStr) {
-        try {
-          competitors = JSON.parse(decodeURIComponent(competitorsStr as string));
-        } catch (e) {
-          competitors = JSON.parse(competitorsStr as string);
-        }
-      }
+      const competitors = competitorsStr ? JSON.parse(competitorsStr) : [];
       
       if (!keys.youtubeKey || !competitors || competitors.length === 0) {
         return res.json({ channels: [], videos: [] });
@@ -270,15 +244,8 @@ app.use(express.json({ limit: '50mb' }));
       let videoLimit = 50;
       try {
         const displayConfigStr = req.headers["x-display-config"];
-        if (req.body?.displayConfig) {
-           if (req.body.displayConfig.videoLimit) videoLimit = req.body.displayConfig.videoLimit;
-        } else if (displayConfigStr) {
-           let display: any;
-           try {
-             display = JSON.parse(decodeURIComponent(displayConfigStr as string));
-           } catch(e) {
-             display = JSON.parse(displayConfigStr as string);
-           }
+        if (displayConfigStr) {
+           const display = JSON.parse(displayConfigStr);
            if (display.videoLimit) videoLimit = display.videoLimit;
         }
       } catch (e) {}
@@ -372,10 +339,10 @@ app.use(express.json({ limit: '50mb' }));
     }
   });
 
-  app.all("/api/youtube-comments", async (req, res) => {
+  app.get("/api/youtube-comments", async (req, res) => {
     try {
       const keys = getKeys(req);
-      const videoId = req.body?.videoId || req.query.videoId;
+      const videoId = req.query.videoId;
       if (!keys.youtubeKey || !videoId) {
         return res.status(400).json({ error: "Missing YouTube Key or videoId" });
       }
@@ -395,7 +362,7 @@ app.use(express.json({ limit: '50mb' }));
     }
   });
 
-  app.all("/api/youtube", async (req, res) => {
+  app.get("/api/youtube", async (req, res) => {
     try {
       const keys = getKeys(req);
       if (!keys.youtubeKey || !keys.youtubeChannels || keys.youtubeChannels.length === 0) {
@@ -420,15 +387,8 @@ app.use(express.json({ limit: '50mb' }));
       let videoLimit = 50;
       try {
         const displayConfigStr = req.headers["x-display-config"] as string;
-        if (req.body?.displayConfig) {
-           if (req.body.displayConfig.videoLimit) videoLimit = req.body.displayConfig.videoLimit;
-        } else if (displayConfigStr) {
-           let display: any;
-           try {
-             display = JSON.parse(decodeURIComponent(displayConfigStr));
-           } catch (e) {
-             display = JSON.parse(displayConfigStr);
-           }
+        if (displayConfigStr) {
+           const display = JSON.parse(displayConfigStr);
            if (display.videoLimit) videoLimit = display.videoLimit;
         }
       } catch (e) {
@@ -480,40 +440,6 @@ app.use(express.json({ limit: '50mb' }));
         }
       }
 
-      if (videosData.items.length > 0) {
-         try {
-           const ids = videosData.items.map((v: any) => v.id);
-           const chunkedIds = [];
-           for (let i = 0; i < ids.length; i += 50) {
-             chunkedIds.push(ids.slice(i, i + 50));
-           }
-           
-           let shortsMap: Record<string, boolean> = {};
-           for (const chunk of chunkedIds) {
-              const results: Record<string, boolean> = {};
-              await Promise.all(chunk.map(async (id: string) => {
-                try {
-                  const response = await fetch(`https://www.youtube.com/shorts/${id}`, {
-                    method: 'HEAD',
-                    redirect: 'manual'
-                  });
-                  results[id] = response.status === 200;
-                } catch (err) {
-                  results[id] = false;
-                }
-              }));
-              shortsMap = { ...shortsMap, ...results };
-           }
-           
-           videosData.items = videosData.items.map((v: any) => {
-             v._isShort = shortsMap[v.id] || false;
-             return v;
-           });
-         } catch (e) {
-           console.error("Failed to check shorts", e);
-         }
-      }
-
       res.json({
         channels: channelsData.items || [],
         videos: videosData.items || []
@@ -524,7 +450,7 @@ app.use(express.json({ limit: '50mb' }));
     }
   });
 
-  app.all("/api/instagram", async (req, res) => {
+  app.get("/api/instagram", async (req, res) => {
     try {
       const keys = getKeys(req);
       if (!keys.instagramKey || !keys.instagramAccounts || keys.instagramAccounts.length === 0) {
@@ -553,7 +479,7 @@ app.use(express.json({ limit: '50mb' }));
   app.post("/api/ai-categorize-videos", async (req, res) => {
     try {
       const { videos } = req.body;
-      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
@@ -561,7 +487,7 @@ app.use(express.json({ limit: '50mb' }));
         return res.json({});
       }
       
-      
+      const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       const prompt = `Analyze the following YouTube videos (title and tags) and categorize each into a very specific, precise niche or topic (e.g., instead of just "Gaming", use "Minecraft Survival Multiplayer", or instead of "Tech", use "Mechanical Keyboard Reviews"). Keep the category name to 1-4 words.
@@ -593,4 +519,24 @@ app.use(express.json({ limit: '50mb' }));
     }
   });
 
-export default app;
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+    app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
+
+startServer();
