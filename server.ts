@@ -1,32 +1,50 @@
+import { GoogleGenAI } from "@google/genai";
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
 
-  app.use(express.json({ limit: '50mb' }));
+
+const app = express();
+
+
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+app.use(express.json({ limit: '50mb' }));
 
   // Helper to extract keys either from header (UI settings) or env var
+  const safeParse = (str: string | undefined | null) => {
+    if (!str) return null;
+    try {
+      return JSON.parse(str);
+    } catch (e) {
+      console.error("JSON Parse error for", str);
+      return null;
+    }
+  };
+
   const getKeys = (req: express.Request) => {
+    const parseHeader = (header: string | string[] | undefined) => {
+      if (!header || header === "[]") return null;
+      const str = header as string;
+      try {
+        return JSON.parse(decodeURIComponent(str));
+      } catch (e) {
+        return safeParse(str);
+      }
+    };
+
     return {
-      youtubeKey: req.headers["x-youtube-key"] || process.env.YOUTUBE_API_KEY,
-      youtubeChannels: req.headers["x-youtube-channels"]
-        ? JSON.parse(req.headers["x-youtube-channels"] as string)
-        : process.env.YOUTUBE_CHANNELS_JSON
-        ? JSON.parse(process.env.YOUTUBE_CHANNELS_JSON)
-        : null,
-      instagramKey: req.headers["x-instagram-key"] || process.env.INSTAGRAM_API_KEY,
-      instagramAccounts: req.headers["x-instagram-accounts"]
-        ? JSON.parse(req.headers["x-instagram-accounts"] as string)
-        : process.env.INSTAGRAM_ACCOUNTS_JSON
-        ? JSON.parse(process.env.INSTAGRAM_ACCOUNTS_JSON)
-        : null,
+      youtubeKey: req.body?.youtubeKey || req.headers["x-youtube-key"] || process.env.YOUTUBE_API_KEY,
+      youtubeChannels: (req.body?.youtubeChannels && req.body.youtubeChannels.length > 0)
+        ? req.body.youtubeChannels
+        : parseHeader(req.headers["x-youtube-channels"]) || safeParse(process.env.YOUTUBE_CHANNELS_JSON),
+      instagramKey: req.body?.instagramKey || req.headers["x-instagram-key"] || process.env.INSTAGRAM_API_KEY,
+      instagramAccounts: (req.body?.instagramAccounts && req.body.instagramAccounts.length > 0)
+        ? req.body.instagramAccounts
+        : parseHeader(req.headers["x-instagram-accounts"]) || safeParse(process.env.INSTAGRAM_ACCOUNTS_JSON),
     };
   };
 
-  app.get("/api/status", (req, res) => {
+  app.all("/api/status", (req, res) => {
     const keys = getKeys(req);
     res.json({
       configured: {
@@ -39,12 +57,12 @@ async function startServer() {
   app.post("/api/ai-insights", async (req, res) => {
     try {
       const { videos, channels, selectedChannelId } = req.body;
-      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
       
-      const { GoogleGenAI } = await import("@google/genai");
+      
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       let targetChannels = channels;
@@ -91,7 +109,7 @@ async function startServer() {
   app.post("/api/ai-analyze-comments", async (req, res) => {
     try {
       const { comments } = req.body;
-      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
@@ -100,7 +118,7 @@ async function startServer() {
         return res.json({ sentiment: "Neutral", sentimentScore: 50, commonQuestions: [], summary: "No comments to analyze." });
       }
       
-      const { GoogleGenAI } = await import("@google/genai");
+      
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       const prompt = `Analyze the following top comments from a YouTube video:
@@ -159,93 +177,109 @@ async function startServer() {
   });
 
   
-  app.get("/api/youtube-competitors", async (req, res) => {
+  const resolveYouTubeChannels = async (channelList: any[], apiKey: string) => {
+    const validIds: string[] = [];
+    const handles: string[] = [];
+
+    for (const c of channelList) {
+      let rawId = (c.channel_id || "").trim();
+      if (!rawId) continue;
+      
+      if (rawId.includes('youtube.com/') || rawId.includes('youtu.be/')) {
+        const match = rawId.match(/(?:youtube\.com\/(?:@|c\/|user\/|channel\/)|youtu\.be\/)([^/?&]+)/);
+        if (match) {
+          if (rawId.includes('/channel/')) {
+            rawId = match[1];
+          } else if (rawId.includes('/@') || rawId.includes('.com/@')) {
+            rawId = '@' + match[1];
+          } else {
+            rawId = match[1];
+             if (!rawId.startsWith('UC') && !rawId.startsWith('@')) {
+              rawId = '@' + rawId;
+            }
+          }
+        }
+      }
+
+      // Clean query strings or paths
+      rawId = rawId.split("?")[0].split("&")[0].split("/")[0];
+
+      if (rawId.startsWith("UC")) {
+        validIds.push(rawId);
+      } else if (rawId.startsWith("@")) {
+        handles.push(rawId);
+      } else {
+        // Fallback: If it has no prefix, try as handle first
+        handles.push("@" + rawId);
+      }
+    }
+
+    let channelsDataItems: any[] = [];
+
+    if (validIds.length > 0) {
+      for (let i = 0; i < validIds.length; i += 50) {
+        const chunk = validIds.slice(i, i + 50).join(",");
+        const channelsRes = await fetch(
+          `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&id=${chunk}&key=${apiKey}`
+        );
+        if (channelsRes.ok) {
+          const data = await channelsRes.json();
+          if (data.items) {
+            channelsDataItems = channelsDataItems.concat(data.items);
+          }
+        }
+      }
+    }
+
+    for (const handle of handles) {
+      const cleanHandle = handle.replace("@", "");
+      const handleRes = await fetch(
+        `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&forHandle=${cleanHandle}&key=${apiKey}`
+      );
+      if (handleRes.ok) {
+        const data = await handleRes.json();
+        if (data.items && data.items.length > 0) {
+          channelsDataItems.push(data.items[0]);
+        }
+      }
+    }
+    
+    return channelsDataItems;
+  };
+
+  app.all("/api/youtube-competitors", async (req, res) => {
     try {
       const keys = getKeys(req);
       const competitorsStr = req.headers["x-youtube-competitors"];
-      const competitors = competitorsStr ? JSON.parse(competitorsStr) : [];
+      let competitors = req.body?.youtubeCompetitors || [];
+      if (competitors.length === 0 && competitorsStr) {
+        try {
+          competitors = JSON.parse(decodeURIComponent(competitorsStr as string));
+        } catch (e) {
+          competitors = JSON.parse(competitorsStr as string);
+        }
+      }
       
       if (!keys.youtubeKey || !competitors || competitors.length === 0) {
         return res.json({ channels: [], videos: [] });
       }
 
-      const validIds = [];
-      const handles = [];
-
-      for (const c of competitors) {
-        let rawId = (c.channel_id || "").trim();
-        if (!rawId) continue;
-        
-        if (rawId.includes('youtube.com/') || rawId.includes('youtu.be/')) {
-          const match = rawId.match(/(?:youtube\.com\/(?:@|c\/|user\/|channel\/)|youtu\.be\/)([^/?&]+)/);
-          if (match) {
-            if (rawId.includes('/channel/')) {
-              rawId = match[1];
-            } else if (rawId.includes('/@') || rawId.includes('.com/@')) {
-              rawId = '@' + match[1];
-            } else {
-              rawId = match[1];
-               if (!rawId.startsWith('UC') && !rawId.startsWith('@')) {
-                rawId = '@' + rawId;
-              }
-            }
-          }
-        }
-
-        if (rawId.startsWith("@")) {
-          handles.push(rawId);
-        } else {
-          validIds.push(rawId);
-        }
-      }
-
-      let channelsDataItems = [];
-
-      if (validIds.length > 0) {
-        for (let i = 0; i < validIds.length; i += 50) {
-          const chunk = validIds.slice(i, i + 50).join(",");
-          const channelsRes = await fetch(
-            `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&id=${chunk}&key=${keys.youtubeKey}`
-          );
-          if (channelsRes.ok) {
-            const data = await channelsRes.json();
-            if (data.items) {
-              channelsDataItems = channelsDataItems.concat(data.items);
-            }
-          }
-        }
-      }
-
-      for (const handle of handles) {
-        const cleanHandle = handle.replace("@", "");
-        const handleRes = await fetch(
-          `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&forHandle=${cleanHandle}&key=${keys.youtubeKey}`
-        );
-        if (handleRes.ok) {
-          const data = await handleRes.json();
-          if (data.items && data.items.length > 0) {
-            channelsDataItems.push(data.items[0]);
-          } else {
-            const userRes = await fetch(
-              `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&forUsername=${cleanHandle}&key=${keys.youtubeKey}`
-            );
-            if (userRes.ok) {
-               const uData = await userRes.json();
-               if (uData.items && uData.items.length > 0) {
-                 channelsDataItems.push(uData.items[0]);
-               }
-            }
-          }
-        }
-      }
+      const channelsDataItems = await resolveYouTubeChannels(competitors, keys.youtubeKey);
 
       const uploadsPlaylists = channelsDataItems.map((item) => item.contentDetails?.relatedPlaylists?.uploads).filter(Boolean) || [];
       
       let videoLimit = 50;
       try {
         const displayConfigStr = req.headers["x-display-config"];
-        if (displayConfigStr) {
-           const display = JSON.parse(displayConfigStr);
+        if (req.body?.displayConfig) {
+           if (req.body.displayConfig.videoLimit) videoLimit = req.body.displayConfig.videoLimit;
+        } else if (displayConfigStr) {
+           let display: any;
+           try {
+             display = JSON.parse(decodeURIComponent(displayConfigStr as string));
+           } catch(e) {
+             display = JSON.parse(displayConfigStr as string);
+           }
            if (display.videoLimit) videoLimit = display.videoLimit;
         }
       } catch (e) {}
@@ -339,10 +373,10 @@ async function startServer() {
     }
   });
 
-  app.get("/api/youtube-comments", async (req, res) => {
+  app.all("/api/youtube-comments", async (req, res) => {
     try {
       const keys = getKeys(req);
-      const videoId = req.query.videoId;
+      const videoId = req.body?.videoId || req.query.videoId;
       if (!keys.youtubeKey || !videoId) {
         return res.status(400).json({ error: "Missing YouTube Key or videoId" });
       }
@@ -362,33 +396,30 @@ async function startServer() {
     }
   });
 
-  app.get("/api/youtube", async (req, res) => {
+  app.all("/api/youtube", async (req, res) => {
     try {
       const keys = getKeys(req);
       if (!keys.youtubeKey || !keys.youtubeChannels || keys.youtubeChannels.length === 0) {
         return res.status(400).json({ error: "YouTube configuration missing" });
       }
 
-      const channelIds = keys.youtubeChannels.map((c: any) => c.channel_id).join(",");
-      
-      const channelsRes = await fetch(
-        `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&id=${channelIds}&key=${keys.youtubeKey}`
-      );
-      
-      if (!channelsRes.ok) {
-        throw new Error(`YouTube API Error: ${channelsRes.statusText}`);
-      }
-
-      const channelsData = await channelsRes.json();
+      const channelsDataItems = await resolveYouTubeChannels(keys.youtubeChannels, keys.youtubeKey as string);
       
       // Fetch videos from uploads playlists
-      const uploadsPlaylists = channelsData.items?.map((item: any) => item.contentDetails?.relatedPlaylists?.uploads).filter(Boolean) || [];
+      const uploadsPlaylists = channelsDataItems.map((item: any) => item.contentDetails?.relatedPlaylists?.uploads).filter(Boolean) || [];
       
       let videoLimit = 50;
       try {
         const displayConfigStr = req.headers["x-display-config"] as string;
-        if (displayConfigStr) {
-           const display = JSON.parse(displayConfigStr);
+        if (req.body?.displayConfig) {
+           if (req.body.displayConfig.videoLimit) videoLimit = req.body.displayConfig.videoLimit;
+        } else if (displayConfigStr) {
+           let display: any;
+           try {
+             display = JSON.parse(decodeURIComponent(displayConfigStr));
+           } catch (e) {
+             display = JSON.parse(displayConfigStr);
+           }
            if (display.videoLimit) videoLimit = display.videoLimit;
         }
       } catch (e) {
@@ -440,8 +471,42 @@ async function startServer() {
         }
       }
 
+      if (videosData.items.length > 0) {
+         try {
+           const ids = videosData.items.map((v: any) => v.id);
+           const chunkedIds = [];
+           for (let i = 0; i < ids.length; i += 50) {
+             chunkedIds.push(ids.slice(i, i + 50));
+           }
+           
+           let shortsMap: Record<string, boolean> = {};
+           for (const chunk of chunkedIds) {
+              const results: Record<string, boolean> = {};
+              await Promise.all(chunk.map(async (id: string) => {
+                try {
+                  const response = await fetch(`https://www.youtube.com/shorts/${id}`, {
+                    method: 'HEAD',
+                    redirect: 'manual'
+                  });
+                  results[id] = response.status === 200;
+                } catch (err) {
+                  results[id] = false;
+                }
+              }));
+              shortsMap = { ...shortsMap, ...results };
+           }
+           
+           videosData.items = videosData.items.map((v: any) => {
+             v._isShort = shortsMap[v.id] || false;
+             return v;
+           });
+         } catch (e) {
+           console.error("Failed to check shorts", e);
+         }
+      }
+
       res.json({
-        channels: channelsData.items || [],
+        channels: channelsDataItems || [],
         videos: videosData.items || []
       });
     } catch (error: any) {
@@ -450,7 +515,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/instagram", async (req, res) => {
+  app.all("/api/instagram", async (req, res) => {
     try {
       const keys = getKeys(req);
       if (!keys.instagramKey || !keys.instagramAccounts || keys.instagramAccounts.length === 0) {
@@ -479,7 +544,7 @@ async function startServer() {
   app.post("/api/ai-categorize-videos", async (req, res) => {
     try {
       const { videos } = req.body;
-      const geminiKey = req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
         return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
       }
@@ -487,7 +552,7 @@ async function startServer() {
         return res.json({});
       }
       
-      const { GoogleGenAI } = await import("@google/genai");
+      
       const ai = new GoogleGenAI({ apiKey: geminiKey as string });
       
       const prompt = `Analyze the following YouTube videos (title and tags) and categorize each into a very specific, precise niche or topic (e.g., instead of just "Gaming", use "Minecraft Survival Multiplayer", or instead of "Tech", use "Mechanical Keyboard Reviews"). Keep the category name to 1-4 words.
@@ -519,24 +584,4 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
-
-    app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
-
-startServer();
+export default app;

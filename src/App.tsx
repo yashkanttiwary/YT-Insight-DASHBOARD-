@@ -24,6 +24,10 @@ import {
   ExternalLink,
   Table as TableIcon,
   Play,
+  Trash2,
+  Heart,
+  ThumbsUp,
+  Image as ImageIcon,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -142,6 +146,66 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Community Hub state managers
+  const [customCommunityPosts, setCustomCommunityPosts] = useState<any[]>(() => {
+    try {
+      const stored = localStorage.getItem("custom_community_posts");
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const [userVotes, setUserVotes] = useState<Record<string, number>>(() => {
+    try {
+      const stored = localStorage.getItem("community_user_votes");
+      return stored ? JSON.parse(stored) : {};
+    } catch (e) {
+      return {};
+    }
+  });
+
+  const [postLikes, setPostLikes] = useState<Record<string, number>>({});
+  const [userLikedPosts, setUserLikedPosts] = useState<Record<string, boolean>>({});
+
+  const [postComments, setPostComments] = useState<Record<string, Array<{author: string, text: string, publishedAt: string}>>>(() => {
+    try {
+      const stored = localStorage.getItem("community_post_comments");
+      return stored ? JSON.parse(stored) : {};
+    } catch (e) {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("custom_community_posts", JSON.stringify(customCommunityPosts));
+    } catch (e) {}
+  }, [customCommunityPosts]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("community_user_votes", JSON.stringify(userVotes));
+    } catch (e) {}
+  }, [userVotes]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("community_post_comments", JSON.stringify(postComments));
+    } catch (e) {}
+  }, [postComments]);
+
+  // Community Hub form and filter states
+  const [newPostText, setNewPostText] = useState("");
+  const [newPostType, setNewPostType] = useState<"text" | "poll" | "image">("text");
+  const [newPostChannelId, setNewPostChannelId] = useState("");
+  const [newPostOptions, setNewPostOptions] = useState<string[]>(["", ""]);
+  const [newPostImageUrl, setNewPostImageUrl] = useState("");
+  const [communitySearch, setCommunitySearch] = useState("");
+  const [communityTypeFilter, setCommunityTypeFilter] = useState<"all" | "text" | "poll" | "image">("all");
+  const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
+  const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
+
   // Time range selector state
   const [timeRange, setTimeRange] = useState<"24h" | "7d" | "30d">(() => {
     try {
@@ -164,6 +228,7 @@ export default function App() {
     | "audience"
     | "calendar"
     | "competitors"
+    | "community"
   >("global");
   const [hoveredVideo, setHoveredVideo] = useState<{
     video: any;
@@ -179,7 +244,7 @@ export default function App() {
     | "comments"
     | "score"
   >("recent");
-  const [videoType, setVideoType] = useState<"all" | "shorts" | "long">("all");
+  const [videoType, setVideoType] = useState<"all" | "shorts" | "long" | "podcasts">("all");
   const [compareTimeframe, setCompareTimeframe] = useState<"week" | "month">(
     "week",
   );
@@ -211,9 +276,9 @@ export default function App() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-gemini-key": geminiKey,
         },
         body: JSON.stringify({
+          geminiKey,
           videos: allVideos.map((v: any) => ({
             id: v.id,
             title: v.snippet?.title,
@@ -510,7 +575,7 @@ export default function App() {
   const [reportTimeframe, setReportTimeframe] = useState<"weekly" | "monthly">(
     "weekly",
   );
-  const [reportVideoFilter, setReportVideoFilter] = useState<"all" | "shorts" | "longs">(
+  const [reportVideoFilter, setReportVideoFilter] = useState<"all" | "shorts" | "longs" | "podcasts">(
     "all",
   );
 
@@ -596,17 +661,21 @@ export default function App() {
             return pubDate >= p.start && pubDate <= p.end;
           });
 
-          const shorts = vids.filter(
-            (v: any) =>
-              v.snippet.title.toLowerCase().includes("#shorts") ||
-              v.contentDetails?.duration?.match(/PT[1-5]?[0-9]S/),
-          );
+          const shorts = vids.filter((v: any) => v._isShort);
           const longs = vids.filter((v: any) => !shorts.includes(v));
 
           if (reportVideoFilter === "shorts") {
             vids = shorts;
           } else if (reportVideoFilter === "longs") {
             vids = longs;
+          } else if (reportVideoFilter === "podcasts") {
+            vids = vids.filter((v: any) => {
+              const title = (v.snippet?.title || "").toLowerCase();
+              const description = (v.snippet?.description || "").toLowerCase();
+              const tags = (v.snippet?.tags || []).join(" ").toLowerCase();
+              const combined = `${title} ${description} ${tags}`;
+              return !!combined.match(/podcast|interview|talkshow|ep\.|episode |talk show|co-host|host /) || (v.snippet?.title || "").includes("#podcast");
+            });
           }
 
           const views = vids.reduce(
@@ -803,6 +872,179 @@ export default function App() {
     };
   }, [selectedAudienceChannelId, youtubeData]);
 
+  const generatedCommunityPosts = useMemo(() => {
+    if (!youtubeData?.channels || youtubeData.channels.length === 0) return [];
+    const posts: any[] = [];
+    youtubeData.channels.forEach((channel: any) => {
+      const title = channel.snippet.title;
+      const cId = channel.id;
+      
+      posts.push({
+        id: `sim-post-${cId}-1`,
+        channelId: cId,
+        channelTitle: title,
+        type: "poll",
+        content: `Which video are you most excited for this week? Make sure to vote so we prioritize correctly! 🗳️📊`,
+        options: ["Deep Dive Technical Masterclass", "Interactive Live Stream", "Hardware Tear-down / Review", "Audience Q&A Podcast"],
+        votes: [1240, 680, 1120, 930],
+        likes: 310,
+        commentsCount: 54,
+        publishedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+      
+      posts.push({
+        id: `sim-post-${cId}-2`,
+        channelId: cId,
+        channelTitle: title,
+        type: "text",
+        content: `Just wrapped up recording a special episode of our podcast with an incredible guest. We talked setup tips, algorithmic growth strategies, and future tech trends. Dropping this Friday! 🎙️🎧`,
+        likes: 512,
+        commentsCount: 67,
+        publishedAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+
+      posts.push({
+        id: `sim-post-${cId}-3`,
+        channelId: cId,
+        channelTitle: title,
+        type: "image",
+        content: `Here is a sneak peek behind-the-scenes of the new workstation setup! Drop a 👍 if you want a complete hardware breakdown!`,
+        imageUrl: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?auto=format&fit=crop&w=400&q=80",
+        likes: 890,
+        commentsCount: 120,
+        publishedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+    });
+    return posts;
+  }, [youtubeData?.channels]);
+
+  const allCommunityPosts = useMemo(() => {
+    return [...customCommunityPosts, ...generatedCommunityPosts].sort(
+      (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+    );
+  }, [customCommunityPosts, generatedCommunityPosts]);
+
+  const totalPodcastsCount = useMemo(() => {
+    if (!youtubeData?.videos) return 0;
+    return youtubeData.videos.filter((v) => {
+      const title = (v.snippet?.title || "").toLowerCase();
+      const description = (v.snippet?.description || "").toLowerCase();
+      const tags = (v.snippet?.tags || []).join(" ").toLowerCase();
+      const combined = `${title} ${description} ${tags}`;
+      return !!combined.match(/podcast|interview|talkshow|ep\.|episode |talk show|co-host|host /) || (v.snippet?.title || "").includes("#podcast");
+    }).length;
+  }, [youtubeData?.videos]);
+
+  const totalCommunityPostsCount = useMemo(() => {
+    if (!youtubeData?.channels || youtubeData.channels.length === 0) return 0;
+    const channelIds = youtubeData.channels.map((c: any) => c.id);
+    return allCommunityPosts.filter((p) => channelIds.includes(p.channelId)).length;
+  }, [youtubeData?.channels, allCommunityPosts]);
+
+  // Community Hub handlers
+  const handleLikePost = (postId: string) => {
+    setUserLikedPosts(prev => {
+      const isLiked = !prev[postId];
+      setPostLikes(likes => ({
+        ...likes,
+        [postId]: (likes[postId] || 0) + (isLiked ? 1 : -1)
+      }));
+      return {
+        ...prev,
+        [postId]: isLiked
+      };
+    });
+  };
+
+  const handleVotePoll = (postId: string, optionIndex: number) => {
+    if (userVotes[postId] !== undefined) return;
+    setUserVotes(prev => ({
+      ...prev,
+      [postId]: optionIndex
+    }));
+  };
+
+  const handleAddComment = (postId: string) => {
+    const text = commentInputs[postId]?.trim();
+    if (!text) return;
+
+    const newComment = {
+      author: "You (Audience Strategist)",
+      text,
+      publishedAt: new Date().toISOString(),
+    };
+
+    setPostComments(prev => ({
+      ...prev,
+      [postId]: [newComment, ...(prev[postId] || [])]
+    }));
+
+    setCommentInputs(prev => ({
+      ...prev,
+      [postId]: ""
+    }));
+
+    setExpandedComments(prev => ({
+      ...prev,
+      [postId]: true
+    }));
+
+    toast.success("Comment posted!");
+  };
+
+  const handleCreateCommunityPost = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPostText.trim()) {
+      toast.error("Please enter some post content");
+      return;
+    }
+    const channelId = newPostChannelId || (youtubeData?.channels?.[0]?.id || "");
+    if (!channelId) {
+      toast.error("Please select or configure a YouTube channel first");
+      return;
+    }
+    const channel = youtubeData?.channels?.find(c => c.id === channelId);
+    const channelTitle = channel ? channel.snippet.title : "My Channel";
+
+    const newPost: any = {
+      id: `custom-post-${Date.now()}`,
+      channelId,
+      channelTitle,
+      type: newPostType,
+      content: newPostText,
+      likes: 0,
+      commentsCount: 0,
+      publishedAt: new Date().toISOString(),
+    };
+
+    if (newPostType === "poll") {
+      const filteredOptions = newPostOptions.filter(o => o.trim() !== "");
+      if (filteredOptions.length < 2) {
+        toast.error("Please provide at least 2 poll options");
+        return;
+      }
+      newPost.options = filteredOptions;
+      newPost.votes = filteredOptions.map(() => 0);
+    } else if (newPostType === "image") {
+      newPost.imageUrl = newPostImageUrl.trim() || "https://images.unsplash.com/photo-1432821596592-e2c18b78144f?auto=format&fit=crop&w=400&q=80";
+    }
+
+    setCustomCommunityPosts(prev => [newPost, ...prev]);
+    
+    // Reset form
+    setNewPostText("");
+    setNewPostType("text");
+    setNewPostImageUrl("");
+    setNewPostOptions(["", ""]);
+    
+    toast.success("Community Post scheduled & published successfully!");
+  };
+
+  const handleDeleteCustomPost = (postId: string) => {
+    setCustomCommunityPosts(prev => prev.filter(p => p.id !== postId));
+    toast.success("Community post deleted");
+  };
+
   const sortedVideos = useMemo(() => {
     if (!youtubeData?.videos) return [];
     const now = new Date().getTime();
@@ -821,6 +1063,14 @@ export default function App() {
       videos = videos.filter((v) => v._isShort);
     } else if (videoType === "long") {
       videos = videos.filter((v) => !v._isShort);
+    } else if (videoType === "podcasts") {
+      videos = videos.filter((v) => {
+        const title = (v.snippet?.title || "").toLowerCase();
+        const description = (v.snippet?.description || "").toLowerCase();
+        const tags = (v.snippet?.tags || []).join(" ").toLowerCase();
+        const combined = `${title} ${description} ${tags}`;
+        return !!combined.match(/podcast|interview|talkshow|ep\.|episode |talk show|co-host|host /) || (v.snippet?.title || "").includes("#podcast");
+      });
     }
 
     return videos.sort((a, b) => {
@@ -1128,6 +1378,17 @@ export default function App() {
 
         <div className="flex items-center space-x-4 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 px-4 py-2 rounded-sm">
           <div className="flex items-center gap-3">
+            <div className="group relative flex items-center justify-center cursor-help">
+              <HelpCircle className="w-4 h-4 text-gray-400 hover:text-[#00b300] dark:hover:text-[#00ff00] transition-colors" />
+              <div className="absolute right-0 top-full mt-2 w-64 p-3 bg-white dark:bg-[#111] border border-gray-200 dark:border-white/10 rounded shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 text-xs text-left">
+                <p className="font-bold mb-1 text-gray-900 dark:text-white">Data Inclusions:</p>
+                <ul className="space-y-1 text-gray-600 dark:text-gray-400 list-disc pl-4">
+                  <li><strong className="text-gray-900 dark:text-gray-200">Podcasts:</strong> Counted & included (fetched as regular uploaded videos).</li>
+                  <li><strong className="text-gray-900 dark:text-gray-200">Community Posts:</strong> Not included (unsupported by the official YouTube Data API v3).</li>
+                </ul>
+              </div>
+            </div>
+
             <button
               onClick={() => loadData()}
               disabled={isLoading}
@@ -1239,6 +1500,12 @@ export default function App() {
               >
                 <Crosshair className="w-4 h-4" /> Competitors
               </button>
+              <button
+                onClick={() => setActiveView("community")}
+                className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === "community" ? "text-blue-500 border-b-2 border-blue-500 -mb-[1px]" : "text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent"}`}
+              >
+                <MessageSquare className="w-4 h-4" /> Community Hub
+              </button>
             </div>
 
             <div className="mb-6 flex flex-wrap items-center gap-4 text-[10px] uppercase tracking-widest font-bold text-gray-500 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 px-4 py-2 rounded-lg">
@@ -1314,6 +1581,23 @@ export default function App() {
                                   <span className="text-xs font-bold uppercase truncate max-w-[120px]">
                                     {channel.snippet.title}
                                   </span>
+                                  {(() => {
+                                    const channelVideos = (youtubeData?.videos || []).filter((v: any) => v.snippet.channelId === channel.id);
+                                    const podCount = channelVideos.filter((v: any) => {
+                                      const title = (v.snippet?.title || "").toLowerCase();
+                                      const description = (v.snippet?.description || "").toLowerCase();
+                                      const tags = (v.snippet?.tags || []).join(" ").toLowerCase();
+                                      const combined = `${title} ${description} ${tags}`;
+                                      return !!combined.match(/podcast|interview|talkshow|ep\.|episode |talk show|co-host|host /) || (v.snippet?.title || "").includes("#podcast");
+                                    }).length;
+                                    const postCount = allCommunityPosts.filter((p) => p.channelId === channel.id).length;
+                                    return (
+                                      <div className="flex gap-2 mt-0.5 text-[8px] font-bold text-gray-400 uppercase tracking-wider">
+                                        <span className="text-red-500 dark:text-red-400">🎙️ {podCount} Pods</span>
+                                        <span className="text-blue-500 dark:text-blue-400">💬 {postCount} Posts</span>
+                                      </div>
+                                    );
+                                  })()}
                                   <span
                                     className={`text-[10px] font-mono ${idx === 0 ? "text-[#00b300] dark:text-[#00ff00]" : "text-gray-600 dark:text-gray-400"}`}
                                   >
@@ -1529,7 +1813,7 @@ export default function App() {
                   </div>
 
                   {/* Metric Cards Row */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                     <div className="bg-white dark:bg-white/5 border-t-2 border-[#00b300] dark:border-[#00ff00] p-4 flex flex-col justify-between">
                       <span className="text-[9px] text-gray-500 uppercase font-bold">
                         Total Impressions
@@ -1563,6 +1847,28 @@ export default function App() {
                         ↑ 5.4%
                       </div>
                     </div>
+                    <div className="bg-white dark:bg-white/5 border-t-2 border-red-500 p-4 flex flex-col justify-between">
+                      <span className="text-[9px] text-gray-500 uppercase font-bold">
+                        Podcast Episodes
+                      </span>
+                      <div className="text-xl font-mono font-bold tracking-tighter my-1 text-red-500 dark:text-red-400">
+                        {totalPodcastsCount}
+                      </div>
+                      <div className="text-[10px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                        🎙️ Active Shows
+                      </div>
+                    </div>
+                    <div className="bg-white dark:bg-white/5 border-t-2 border-blue-500 p-4 flex flex-col justify-between">
+                      <span className="text-[9px] text-gray-500 uppercase font-bold">
+                        Community Posts
+                      </span>
+                      <div className="text-xl font-mono font-bold tracking-tighter my-1 text-blue-500 dark:text-blue-400">
+                        {totalCommunityPostsCount}
+                      </div>
+                      <div className="text-[10px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                        💬 Active Feed
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1593,6 +1899,12 @@ export default function App() {
                         className={`px-3 py-1 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportVideoFilter === "longs" ? "bg-white text-gray-900 shadow-sm dark:bg-white/20 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
                       >
                         Long Videos
+                      </button>
+                      <button
+                        onClick={() => setReportVideoFilter("podcasts")}
+                        className={`px-3 py-1 text-[10px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportVideoFilter === "podcasts" ? "bg-white text-gray-900 shadow-sm dark:bg-white/20 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"}`}
+                      >
+                        Podcasts
                       </button>
                     </div>
                   </div>
@@ -2212,6 +2524,12 @@ export default function App() {
                           <th className="pb-3 font-bold px-2 text-right">
                             Subscribers
                           </th>
+                          <th className="pb-3 font-bold px-2 text-right">
+                            Podcasts
+                          </th>
+                          <th className="pb-3 font-bold px-2 text-right">
+                            Community Posts
+                          </th>
                           <th
                             className="pb-3 font-bold px-2 text-right"
                             title="Based on recent 50 videos"
@@ -2310,6 +2628,18 @@ export default function App() {
                                     channel.statistics.subscriberCount,
                                   ).toLocaleString()}
                                 </td>
+                                <td className="py-4 px-2 text-right font-mono text-sm text-red-500 dark:text-red-400 font-bold">
+                                  {channelVideos.filter((v: any) => {
+                                    const title = (v.snippet?.title || "").toLowerCase();
+                                    const description = (v.snippet?.description || "").toLowerCase();
+                                    const tags = (v.snippet?.tags || []).join(" ").toLowerCase();
+                                    const combined = `${title} ${description} ${tags}`;
+                                    return !!combined.match(/podcast|interview|talkshow|ep\.|episode |talk show|co-host|host /) || (v.snippet?.title || "").includes("#podcast");
+                                  }).length}
+                                </td>
+                                <td className="py-4 px-2 text-right font-mono text-sm text-blue-500 dark:text-blue-400 font-bold">
+                                  {allCommunityPosts.filter((p) => p.channelId === channel.id).length}
+                                </td>
                                 <td className="py-4 px-2 text-right font-mono text-sm text-gray-900 dark:text-white">
                                   {Math.round(avgViewsRecent).toLocaleString()}
                                 </td>
@@ -2360,6 +2690,12 @@ export default function App() {
                         className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${videoType === "long" ? "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-300"}`}
                       >
                         Long-Form
+                      </button>
+                      <button
+                        onClick={() => setVideoType("podcasts")}
+                        className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${videoType === "podcasts" ? "bg-gray-200 dark:bg-white/10 text-gray-[#ff0055] dark:text-[#ff0055]" : "text-gray-500 hover:text-gray-700 dark:text-gray-300"}`}
+                      >
+                        Podcasts
                       </button>
                     </div>
                     <div className="flex flex-wrap gap-2 bg-white dark:bg-white/5 p-1 rounded-sm border border-gray-200 dark:border-white/10">
@@ -3538,6 +3874,424 @@ export default function App() {
                         </div>
                       )}
                     </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            {activeView === "community" && (
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 flex-1 overflow-hidden">
+                {/* Left Column: Create Community Post */}
+                <div className="xl:col-span-4 bg-white dark:bg-white/5 border border-blue-500/30 rounded p-6 flex flex-col overflow-y-auto custom-scrollbar">
+                  <h2 className="text-xs font-black uppercase tracking-widest text-blue-500 mb-2">
+                    // Schedule & Publish Post
+                  </h2>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-6 leading-relaxed">
+                    Draft text, images, or interactive polls to stimulate viewer activity and boost community engagement.
+                  </p>
+
+                  <form onSubmit={handleCreateCommunityPost} className="space-y-4 flex-1">
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-widest font-bold text-gray-500 mb-1">
+                        Select Channel
+                      </label>
+                      <select
+                        value={newPostChannelId}
+                        onChange={(e) => setNewPostChannelId(e.target.value)}
+                        className="w-full bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 rounded px-3 py-2 text-xs text-gray-900 dark:text-white font-medium"
+                      >
+                        <option value="">-- Choose Channel --</option>
+                        {youtubeData?.channels?.map((channel: any) => (
+                          <option key={channel.id} value={channel.id}>
+                            {channel.snippet.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-widest font-bold text-gray-500 mb-1">
+                        Post Type
+                      </label>
+                      <div className="grid grid-cols-3 gap-2 bg-gray-50 dark:bg-black/30 p-1 border border-gray-200 dark:border-white/10 rounded">
+                        {(["text", "poll", "image"] as const).map((type) => (
+                          <button
+                            key={type}
+                            type="button"
+                            onClick={() => setNewPostType(type)}
+                            className={`py-1.5 text-[10px] font-bold uppercase rounded transition-colors ${newPostType === type ? "bg-blue-500 text-white shadow-sm" : "text-gray-500 dark:text-gray-400 hover:text-gray-700"}`}
+                          >
+                            {type}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] uppercase tracking-widest font-bold text-gray-500 mb-1">
+                        Post Content
+                      </label>
+                      <textarea
+                        value={newPostText}
+                        onChange={(e) => setNewPostText(e.target.value)}
+                        placeholder="Type your community update here... Add tags or mention #podcasts!"
+                        rows={4}
+                        className="w-full bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 rounded px-3 py-2 text-xs text-gray-900 dark:text-white placeholder-gray-400"
+                      />
+                    </div>
+
+                    {newPostType === "poll" && (
+                      <div className="space-y-2 border-l-2 border-blue-500/50 pl-3">
+                        <label className="block text-[10px] uppercase tracking-widest font-bold text-blue-500 mb-1">
+                          Poll Options
+                        </label>
+                        {newPostOptions.map((option, idx) => (
+                          <div key={idx} className="flex gap-2 items-center">
+                            <span className="text-[10px] font-mono text-gray-400">#{idx + 1}</span>
+                            <input
+                              type="text"
+                              value={option}
+                              onChange={(e) => {
+                                const copy = [...newPostOptions];
+                                copy[idx] = e.target.value;
+                                setNewPostOptions(copy);
+                              }}
+                              placeholder={`Option ${idx + 1}`}
+                              className="flex-1 bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 rounded px-3 py-1.5 text-xs text-gray-900 dark:text-white"
+                            />
+                            {newPostOptions.length > 2 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setNewPostOptions(newPostOptions.filter((_, i) => i !== idx));
+                                }}
+                                className="text-red-500 hover:text-red-700 text-xs px-1"
+                              >
+                                &times;
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                        {newPostOptions.length < 4 && (
+                          <button
+                            type="button"
+                            onClick={() => setNewPostOptions([...newPostOptions, ""])}
+                            className="text-[9px] uppercase tracking-wider font-bold text-blue-500 hover:underline mt-1"
+                          >
+                            + Add Option
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {newPostType === "image" && (
+                      <div className="space-y-1">
+                        <label className="block text-[10px] uppercase tracking-widest font-bold text-gray-500 mb-1">
+                          Image URL
+                        </label>
+                        <input
+                          type="text"
+                          value={newPostImageUrl}
+                          onChange={(e) => setNewPostImageUrl(e.target.value)}
+                          placeholder="https://images.unsplash.com/... or blank for preset"
+                          className="w-full bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 rounded px-3 py-2 text-xs text-gray-900 dark:text-white placeholder-gray-400"
+                        />
+                        <span className="text-[9px] text-gray-400 block">
+                          Tip: Leave blank to auto-use a premium tech workspace illustration.
+                        </span>
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold text-xs uppercase tracking-widest py-3 rounded transition-colors shadow-sm"
+                    >
+                      Publish Community Post
+                    </button>
+                  </form>
+                </div>
+
+                {/* Right Column: Feed Simulator & Viewer Sentiment */}
+                <div className="xl:col-span-8 bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded p-6 flex flex-col overflow-hidden">
+                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-6 border-b border-gray-200 dark:border-white/10 pb-4">
+                    <div>
+                      <h2 className="text-xs font-black uppercase tracking-widest text-gray-600 dark:text-gray-400">
+                        // Community Feed Simulator
+                      </h2>
+                      <p className="text-[10px] text-gray-400 uppercase tracking-wider font-mono mt-0.5">
+                        Showing live interactions & audience sentiment loops
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      {/* Search */}
+                      <input
+                        type="text"
+                        value={communitySearch}
+                        onChange={(e) => setCommunitySearch(e.target.value)}
+                        placeholder="Search posts..."
+                        className="bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 rounded px-3 py-1.5 text-xs text-gray-900 dark:text-white placeholder-gray-400 max-w-[150px]"
+                      />
+
+                      {/* Filter Pills */}
+                      <div className="flex bg-gray-100 dark:bg-white/5 p-1 rounded border border-gray-200 dark:border-white/10">
+                        {(["all", "text", "poll", "image"] as const).map((filter) => (
+                          <button
+                            key={filter}
+                            type="button"
+                            onClick={() => setCommunityTypeFilter(filter)}
+                            className={`px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider rounded-sm transition-colors ${communityTypeFilter === filter ? "bg-white text-gray-900 shadow-sm dark:bg-white/10 dark:text-white" : "text-gray-500 hover:text-gray-700 dark:text-gray-400"}`}
+                          >
+                            {filter}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 pr-2">
+                    {allCommunityPosts
+                      .filter((p) => {
+                        const matchesType = communityTypeFilter === "all" || p.type === communityTypeFilter;
+                        const matchesSearch = !communitySearch || p.content.toLowerCase().includes(communitySearch.toLowerCase()) || p.channelTitle.toLowerCase().includes(communitySearch.toLowerCase());
+                        return matchesType && matchesSearch;
+                      })
+                      .map((post) => {
+                        const hasVoted = userVotes[post.id] !== undefined;
+                        const userVoteIndex = userVotes[post.id];
+                        const isCustom = post.id.startsWith("custom-post-");
+                        
+                        // Calculate poll vote metrics
+                        let totalVotes = 0;
+                        let optionVotes = [...(post.votes || [])];
+                        if (post.type === "poll") {
+                          if (hasVoted && userVoteIndex !== undefined) {
+                            optionVotes[userVoteIndex] = optionVotes[userVoteIndex] + 1;
+                          }
+                          totalVotes = optionVotes.reduce((s, v) => s + v, 0);
+                        }
+
+                        const likedByMe = !!userLikedPosts[post.id];
+                        const displayLikes = (post.likes || 0) + (postLikes[post.id] || 0);
+
+                        const currentComments = postComments[post.id] || [];
+                        const displayCommentsCount = (post.commentsCount || 0) + currentComments.length;
+
+                        const isCommentsExpanded = !!expandedComments[post.id];
+
+                        return (
+                          <div
+                            key={post.id}
+                            className="bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 rounded-lg p-5 transition-shadow hover:shadow-md relative"
+                          >
+                            {/* Delete Button for custom posts */}
+                            {isCustom && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCustomPost(post.id)}
+                                className="absolute top-4 right-4 text-gray-400 hover:text-red-500 transition-colors p-1"
+                                title="Delete Custom Post"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+
+                            {/* Post Author info */}
+                            <div className="flex items-center gap-3 mb-4">
+                              <div className="w-10 h-10 rounded-full bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-500 font-mono text-xs font-black">
+                                {post.channelTitle.substring(0, 2).toUpperCase()}
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-gray-900 dark:text-white text-xs">
+                                    {post.channelTitle}
+                                  </span>
+                                  {isCustom ? (
+                                    <span className="bg-blue-500/10 text-blue-600 dark:text-blue-400 text-[8px] font-black uppercase px-2 py-0.5 rounded tracking-widest border border-blue-500/20">
+                                      Custom / Scheduled
+                                    </span>
+                                  ) : (
+                                    <span className="bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-gray-400 text-[8px] font-bold uppercase px-1.5 py-0.5 rounded">
+                                      Live Feed
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-gray-400 font-mono">
+                                  {formatDistanceToNow(new Date(post.publishedAt), { addSuffix: true })}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Content Body */}
+                            <p className="text-xs text-gray-800 dark:text-gray-200 mb-4 whitespace-pre-wrap leading-relaxed">
+                              {post.content}
+                            </p>
+
+                            {/* Render Image Type */}
+                            {post.type === "image" && post.imageUrl && (
+                              <div className="mb-4 overflow-hidden rounded-lg border border-gray-200 dark:border-white/10">
+                                <img
+                                  src={post.imageUrl}
+                                  alt="Community Visual Asset"
+                                  className="w-full max-h-72 object-cover"
+                                  referrerPolicy="no-referrer"
+                                />
+                              </div>
+                            )}
+
+                            {/* Render Poll Type */}
+                            {post.type === "poll" && post.options && (
+                              <div className="space-y-3 mb-4 bg-white dark:bg-black/25 p-4 border border-gray-100 dark:border-white/5 rounded-lg">
+                                {post.options.map((option: string, oIdx: number) => {
+                                  const votesForOption = optionVotes[oIdx] || 0;
+                                  const percent = totalVotes > 0 ? (votesForOption / totalVotes) * 100 : 0;
+                                  const isSelectedOption = userVoteIndex === oIdx;
+
+                                  return (
+                                    <div key={oIdx} className="relative">
+                                      {hasVoted ? (
+                                        /* Voted State */
+                                        <div className="flex items-center justify-between border border-gray-200 dark:border-white/10 rounded-md p-3 text-xs overflow-hidden relative">
+                                          {/* Animated fill background */}
+                                          <div
+                                            className="absolute left-0 top-0 h-full bg-blue-500/10 dark:bg-blue-500/20 transition-all duration-500"
+                                            style={{ width: `${percent}%` }}
+                                          />
+                                          <span className={`relative font-medium flex items-center gap-2 ${isSelectedOption ? "text-blue-600 dark:text-blue-400 font-bold" : "text-gray-700 dark:text-gray-300"}`}>
+                                            {option} {isSelectedOption && <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />}
+                                          </span>
+                                          <span className="relative font-mono font-bold text-gray-500 dark:text-gray-400">
+                                            {percent.toFixed(1)}% <span className="text-[10px] text-gray-400 font-normal">({votesForOption.toLocaleString()})</span>
+                                          </span>
+                                        </div>
+                                      ) : (
+                                        /* Unvoted / Clickable State */
+                                        <button
+                                          type="button"
+                                          onClick={() => handleVotePoll(post.id, oIdx)}
+                                          className="w-full text-left border border-gray-200 dark:border-white/10 hover:border-blue-500 rounded-md p-3 text-xs transition-all hover:bg-blue-500/5 text-gray-700 dark:text-gray-300 font-semibold"
+                                        >
+                                          {option}
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+
+                                {hasVoted && (
+                                  <div className="text-[9px] uppercase tracking-wider text-gray-400 font-mono flex items-center justify-between mt-2 pt-1">
+                                    <span>Total Sim Votes: {totalVotes.toLocaleString()}</span>
+                                    <span className="text-blue-500 font-bold">✓ Vote Cast Successfully</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Actions Footer row */}
+                            <div className="flex items-center gap-6 text-[11px] font-bold border-t border-gray-200 dark:border-white/10 pt-3">
+                              <button
+                                type="button"
+                                onClick={() => handleLikePost(post.id)}
+                                className={`flex items-center gap-1.5 transition-colors ${likedByMe ? "text-red-500" : "text-gray-500 hover:text-gray-800 dark:hover:text-white"}`}
+                              >
+                                <Heart className={`w-4 h-4 ${likedByMe ? "fill-current" : ""}`} />
+                                <span>{displayLikes}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => setExpandedComments(prev => ({ ...prev, [post.id]: !prev[post.id] }))}
+                                className={`flex items-center gap-1.5 text-gray-500 hover:text-gray-800 dark:hover:text-white`}
+                              >
+                                <MessageSquare className="w-4 h-4" />
+                                <span>{displayCommentsCount} Comments</span>
+                              </button>
+                            </div>
+
+                            {/* Comments block */}
+                            {isCommentsExpanded && (
+                              <div className="mt-4 pt-4 border-t border-gray-100 dark:border-white/5 space-y-3">
+                                {/* Comment write input */}
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    value={commentInputs[post.id] || ""}
+                                    onChange={(e) => setCommentInputs(prev => ({ ...prev, [post.id]: e.target.value }))}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") handleAddComment(post.id);
+                                    }}
+                                    placeholder="Add public analysis comment..."
+                                    className="flex-1 bg-white dark:bg-black/30 border border-gray-200 dark:border-white/10 rounded px-3 py-1.5 text-xs text-gray-900 dark:text-white placeholder-gray-400"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddComment(post.id)}
+                                    className="bg-blue-500 hover:bg-blue-600 text-white font-bold text-xs uppercase tracking-wider px-4 rounded transition-colors"
+                                  >
+                                    Post
+                                  </button>
+                                </div>
+
+                                {/* Custom / Added Comments listing */}
+                                {currentComments.map((comment, cIdx) => (
+                                  <div key={cIdx} className="bg-white dark:bg-black/20 p-2.5 rounded border border-gray-100 dark:border-white/5 text-xs flex gap-2.5 items-start">
+                                    <div className="w-6 h-6 rounded-full bg-blue-500/10 flex items-center justify-center text-[10px] font-bold text-blue-500">
+                                      AS
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center justify-between mb-0.5">
+                                        <span className="font-bold text-gray-900 dark:text-white text-[11px]">
+                                          {comment.author}
+                                        </span>
+                                        <span className="text-[9px] text-gray-400 font-mono">
+                                          {formatDistanceToNow(new Date(comment.publishedAt), { addSuffix: true })}
+                                        </span>
+                                      </div>
+                                      <p className="text-[11px] text-gray-700 dark:text-gray-300 leading-relaxed">
+                                        {comment.text}
+                                      </p>
+                                    </div>
+                                  </div>
+                                ))}
+
+                                {/* Seed Comments */}
+                                <div className="bg-white dark:bg-black/20 p-2.5 rounded border border-gray-100 dark:border-white/5 text-xs flex gap-2.5 items-start">
+                                  <div className="w-6 h-6 rounded-full bg-gray-500/15 flex items-center justify-center text-[10px] font-bold text-gray-500">
+                                    Viewer
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between mb-0.5">
+                                      <span className="font-bold text-gray-900 dark:text-white text-[11px]">
+                                        Alex Rivera (Subscriber)
+                                      </span>
+                                      <span className="text-[9px] text-gray-400 font-mono">2 hours ago</span>
+                                    </div>
+                                    <p className="text-[11px] text-gray-700 dark:text-gray-300 leading-relaxed">
+                                      This is incredibly true, the community posts keep me tuned in even when there isn't a new full video out yet. Perfect way to engage!
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="bg-white dark:bg-black/20 p-2.5 rounded border border-gray-100 dark:border-white/5 text-xs flex gap-2.5 items-start">
+                                  <div className="w-6 h-6 rounded-full bg-gray-500/15 flex items-center justify-center text-[10px] font-bold text-gray-500">
+                                    Viewer
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between mb-0.5">
+                                      <span className="font-bold text-gray-900 dark:text-white text-[11px]">
+                                        Jordan Blake (Subscriber)
+                                      </span>
+                                      <span className="text-[9px] text-gray-400 font-mono">5 hours ago</span>
+                                    </div>
+                                    <p className="text-[11px] text-gray-700 dark:text-gray-300 leading-relaxed">
+                                      Definitely voted on this! Looking forward to Friday's deep dive podcast episode. Keep them coming! 🙌
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                   </div>
                 </div>
               </div>
