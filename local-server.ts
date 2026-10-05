@@ -2,7 +2,7 @@ import app from "./server.ts";
 import path from "path";
 import express from "express";
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const PORT = 3000;
 
 async function start() {
   if (process.env.NODE_ENV !== "production") {

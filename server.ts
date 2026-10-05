@@ -371,43 +371,9 @@ app.use(express.json({ limit: '50mb' }));
 
       if (videosData.items.length > 0) {
          try {
-           // Only HEAD check potential Shorts (duration <= 60 seconds) to avoid rate limits
-           const idsToCheck = videosData.items
-             .filter((v: any) => {
-               const durationSec = durationToSeconds(v.contentDetails?.duration || "");
-               return durationSec > 0 && durationSec <= 60;
-             })
-             .map((v: any) => v.id);
-
-           const chunkedIds = [];
-           for (let i = 0; i < idsToCheck.length; i += 50) {
-             chunkedIds.push(idsToCheck.slice(i, i + 50));
-           }
-           
-           let shortsMap: Record<string, boolean> = {};
-           for (const chunk of chunkedIds) {
-              const results: Record<string, boolean> = {};
-              await Promise.all(chunk.map(async (id: string) => {
-                try {
-                  const response = await fetch(`https://www.youtube.com/shorts/${id}`, {
-                    method: 'HEAD',
-                    redirect: 'manual'
-                  });
-                  results[id] = response.status === 200;
-                } catch (err) {
-                  results[id] = false;
-                }
-              }));
-              shortsMap = { ...shortsMap, ...results };
-           }
-           
            videosData.items = videosData.items.map((v: any) => {
              const durationSec = durationToSeconds(v.contentDetails?.duration || "");
-             if (durationSec > 60) {
-               v._isShort = false;
-             } else {
-               v._isShort = shortsMap[v.id] || false;
-             }
+             v._isShort = durationSec > 0 && durationSec <= 60;
              return v;
            });
          } catch (e) {
@@ -448,6 +414,11 @@ app.use(express.json({ limit: '50mb' }));
     }
   });
 
+  // Robust in-memory caches to prevent machine hangs, rate limits, and slow loading
+  const serverYouTubeCache = new Map<string, { timestamp: number; data: any }>();
+  const serverVideoIdCache = new Map<string, any>();
+  const CACHE_TTL_MS = 8 * 60 * 1000; // 8 minutes
+
   app.all("/api/youtube", async (req, res) => {
     try {
       const keys = getKeys(req);
@@ -455,11 +426,6 @@ app.use(express.json({ limit: '50mb' }));
         return res.status(400).json({ error: "YouTube configuration missing" });
       }
 
-      const channelsDataItems = await resolveChannels(keys.youtubeChannels, keys.youtubeKey);
-      
-      // Fetch videos from uploads playlists
-      const uploadsPlaylists = channelsDataItems.map((item: any) => item.contentDetails?.relatedPlaylists?.uploads).filter(Boolean) || [];
-      
       let videoLimit = 50;
       try {
         const displayConfigStr = req.headers["x-display-config"] as string;
@@ -477,6 +443,19 @@ app.use(express.json({ limit: '50mb' }));
       } catch (e) {
         // ignore JSON parse error
       }
+
+      const forceRefresh = req.query.force === "true" || req.headers["x-force-refresh"] === "true";
+      const cacheKey = JSON.stringify(keys.youtubeChannels) + `_${videoLimit}`;
+      const cached = serverYouTubeCache.get(cacheKey);
+
+      if (!forceRefresh && cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+        return res.json(cached.data);
+      }
+
+      const channelsDataItems = await resolveChannels(keys.youtubeChannels, keys.youtubeKey);
+      
+      // Fetch videos from uploads playlists
+      const uploadsPlaylists = channelsDataItems.map((item: any) => item.contentDetails?.relatedPlaylists?.uploads).filter(Boolean) || [];
       
       // Fetch playlist items for each channel safely (no race conditions!)
       const playlistResults = await Promise.all(uploadsPlaylists.map(async (playlistId: string) => {
@@ -539,58 +518,133 @@ app.use(express.json({ limit: '50mb' }));
       }
 
       if (videosData.items.length > 0) {
-         try {
-           // Only HEAD check potential Shorts (duration <= 60 seconds) to avoid rate limits
-           const idsToCheck = videosData.items
-             .filter((v: any) => {
-               const durationSec = durationToSeconds(v.contentDetails?.duration || "");
-               return durationSec > 0 && durationSec <= 60;
-             })
-             .map((v: any) => v.id);
-
-           const chunkedIds = [];
-           for (let i = 0; i < idsToCheck.length; i += 50) {
-             chunkedIds.push(idsToCheck.slice(i, i + 50));
-           }
-           
-           let shortsMap: Record<string, boolean> = {};
-           for (const chunk of chunkedIds) {
-              const results: Record<string, boolean> = {};
-              await Promise.all(chunk.map(async (id: string) => {
-                try {
-                  const response = await fetch(`https://www.youtube.com/shorts/${id}`, {
-                    method: 'HEAD',
-                    redirect: 'manual'
-                  });
-                  results[id] = response.status === 200;
-                } catch (err) {
-                  results[id] = false;
-                }
-              }));
-              shortsMap = { ...shortsMap, ...results };
-           }
-           
-           videosData.items = videosData.items.map((v: any) => {
-             const durationSec = durationToSeconds(v.contentDetails?.duration || "");
-             if (durationSec > 60) {
-               v._isShort = false;
-             } else {
-               v._isShort = shortsMap[v.id] || false;
-             }
-             return v;
-           });
-         } catch (e) {
-           console.error("Failed to check shorts", e);
-         }
+        videosData.items = videosData.items.map((v: any) => {
+          const durationSec = durationToSeconds(v.contentDetails?.duration || "");
+          v._isShort = durationSec > 0 && durationSec <= 60;
+          return v;
+        });
       }
 
-      res.json({
+      const responsePayload = {
         channels: channelsDataItems || [],
         videos: videosData.items || []
-      });
+      };
+      serverYouTubeCache.set(cacheKey, { timestamp: Date.now(), data: responsePayload });
+
+      res.json(responsePayload);
     } catch (error: any) {
       console.error("[YouTube API Error]", error.message);
       res.status(500).json({ error: "YouTube Error: " + error.message });
+    }
+  });
+
+  app.post("/api/youtube-videos-by-id", async (req, res) => {
+    try {
+      const keys = getKeys(req);
+      const { videoIds } = req.body;
+      const apiKey = req.body?.youtubeKey || keys.youtubeKey;
+      
+      if (!apiKey) {
+        return res.status(400).json({ error: "Missing YouTube API Key" });
+      }
+
+      if (!Array.isArray(videoIds) || videoIds.length === 0) {
+        return res.json({ videos: [] });
+      }
+
+      // Deduplicate IDs and clean
+      const uniqueIds = Array.from(new Set(videoIds.map((id: any) => String(id).trim()).filter(Boolean)));
+      
+      // Check in-memory server cache first for instant response
+      const cachedResults: any[] = [];
+      const uncachedIds: string[] = [];
+
+      for (const id of uniqueIds) {
+        if (serverVideoIdCache.has(id)) {
+          cachedResults.push(serverVideoIdCache.get(id));
+        } else {
+          uncachedIds.push(id);
+        }
+      }
+
+      // If all requested video IDs are already in cache, return immediately (0ms!)
+      if (uncachedIds.length === 0) {
+        return res.json({ videos: cachedResults });
+      }
+
+      const chunkedIds: string[][] = [];
+      for (let i = 0; i < uncachedIds.length; i += 50) {
+        chunkedIds.push(uncachedIds.slice(i, i + 50));
+      }
+
+      // Worker pool to limit concurrent requests to 4 at a time to prevent rate limits & memory bloat
+      const concurrencyLimit = 4;
+      let currentIndex = 0;
+      const allResults: any[] = [];
+
+      async function worker() {
+        while (currentIndex < chunkedIds.length) {
+          const chunk = chunkedIds[currentIndex++];
+          try {
+            const videosRes = await fetch(
+              `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${chunk.join(',')}&key=${apiKey}`,
+              { signal: AbortSignal.timeout(6000) }
+            );
+            if (videosRes.ok) {
+              const vData = await videosRes.json();
+              const items = vData.items || [];
+              for (const v of items) {
+                const durationSec = durationToSeconds(v.contentDetails?.duration || "");
+                const thumb =
+                  v.snippet?.thumbnails?.medium?.url ||
+                  v.snippet?.thumbnails?.default?.url ||
+                  `https://img.youtube.com/vi/${v.id}/mqdefault.jpg`;
+                // Lean payload stripped of huge unused descriptions to handle 10,000+ items smoothly
+                const itemPayload = {
+                  id: v.id,
+                  snippet: {
+                    title: v.snippet?.title || `Video ${v.id}`,
+                    publishedAt: v.snippet?.publishedAt || new Date().toISOString(),
+                    channelId: v.snippet?.channelId || "",
+                    channelTitle: v.snippet?.channelTitle || "",
+                    thumbnails: {
+                      default: { url: thumb },
+                      medium: { url: thumb },
+                    },
+                  },
+                  statistics: {
+                    viewCount: v.statistics?.viewCount || "0",
+                    likeCount: v.statistics?.likeCount || "0",
+                    commentCount: v.statistics?.commentCount || "0",
+                  },
+                  contentDetails: {
+                    duration: v.contentDetails?.duration || "",
+                  },
+                  _isShort: durationSec > 0 && durationSec <= 60,
+                };
+                serverVideoIdCache.set(v.id, itemPayload);
+                allResults.push(itemPayload);
+              }
+            } else {
+              const errTxt = await videosRes.text();
+              console.error(`YouTube batch fetch failed for chunk: ${errTxt.substring(0, 150)}`);
+            }
+          } catch (e) {
+            console.error("Failed to fetch video details chunk", e);
+          }
+        }
+      }
+
+      const workers = Array.from(
+        { length: Math.min(concurrencyLimit, chunkedIds.length) },
+        () => worker()
+      );
+      await Promise.all(workers);
+
+      res.json({ videos: [...cachedResults, ...allResults] });
+    } catch (error: any) {
+      console.error("[YouTube ID Videos Error]", error.message);
+      res.status(500).json({ error: "Failed to fetch ID videos: " + error.message });
     }
   });
 
@@ -660,6 +714,71 @@ app.use(express.json({ limit: '50mb' }));
     } catch (error: any) {
       console.error("[AI Categorize Error]", error.message);
       res.status(500).json({ error: `Failed to categorize videos: ${error.message}` });
+    }
+  });
+
+
+  app.post("/api/niche-research", async (req, res) => {
+    try {
+      const { niche } = req.body;
+      const keys = getKeys(req);
+      const geminiKey = req.body?.geminiKey || req.headers["x-gemini-key"] || process.env.GEMINI_API_KEY;
+
+      if (!keys.youtubeKey) return res.status(400).json({ error: "YouTube API key missing" });
+      if (!geminiKey) return res.status(400).json({ error: "GEMINI_API_KEY is not configured on the server, and no key was provided in settings." });
+      if (!niche) return res.status(400).json({ error: "Niche topic is required" });
+
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const publishedAfter = thirtyDaysAgo.toISOString();
+
+      const ytUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(niche)}&type=video&order=viewCount&publishedAfter=${publishedAfter}&maxResults=25&key=${keys.youtubeKey}`;
+      const ytRes = await fetch(ytUrl);
+      
+      if (!ytRes.ok) {
+        throw new Error(`YouTube Search API Error: ${ytRes.statusText}`);
+      }
+      
+      const ytData = await ytRes.json();
+      const searchResults = ytData.items.map((i: any) => ({
+        title: i.snippet.title,
+        channelTitle: i.snippet.channelTitle,
+        publishedAt: i.snippet.publishedAt,
+        videoId: i.id.videoId,
+      }));
+
+      const ai = new GoogleGenAI({ apiKey: geminiKey as string });
+      const prompt = `You are an elite YouTube strategist and analyst.
+Analyze these recent top-performing videos for the niche "${niche}":
+${JSON.stringify(searchResults)}
+
+Based strictly on this data, provide a JSON response containing:
+1. "trendingTopics": an array of 3-5 specific trending sub-topics or keywords currently working in this niche.
+2. "contentIdeas": an array of 3-5 specific video ideas. Each object should have:
+   - "title" (string): A highly clickable title.
+   - "format" (string): e.g., Tutorial, List, Story, Challenge.
+   - "rationale" (string): Why it will work based on the current trends.
+3. "discoveredCompetitors": an array of 3-5 channels from the data provided. Each object should have:
+   - "channelName" (string)
+   - "analysis" (string): What they seem to be doing right based on their titles.
+
+Return ONLY a valid JSON object without markdown formatting.`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        }
+      });
+
+      let rawText = response.text || "{}";
+      rawText = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
+
+      res.json(JSON.parse(rawText));
+    } catch (error: any) {
+      console.error("[Niche Research Error]", error.message);
+      res.status(500).json({ error: `Research failed: ${error.message}` });
     }
   });
 

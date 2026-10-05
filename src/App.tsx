@@ -1,5 +1,5 @@
 import toast from "react-hot-toast";
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Settings,
   HelpCircle,
@@ -27,10 +27,18 @@ import {
   Trash2,
   Heart,
   ThumbsUp,
-  Image as ImageIcon,
+  Image as ImageIcon, Search, Target, Lightbulb, Compass, FileSpreadsheet,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { IDVideoModal } from "./components/IDVideoModal";
+import {
+  getIdVideosFromStorage,
+  saveIdVideosToStorage,
+  getHydratedIdVideosCache,
+  saveHydratedIdVideosCache,
+  formatLabel,
+} from "./lib/idVideoParser";
 import {
   checkStatus,
   fetchYouTubeData,
@@ -39,8 +47,11 @@ import {
   fetchYouTubeCompetitors,
   fetchVideoComments,
   analyzeComments,
+  fetchNicheResearch,
+  getKeysFromStorage,
+  fetchVideosByIds,
 } from "./api";
-import { DashboardKeys } from "./types";
+import { DashboardKeys, DashboardMode, IDVideoItem } from "./types";
 import {
   AreaChart,
   Area,
@@ -136,13 +147,26 @@ export default function App() {
   const [youtubeData, setYoutubeData] = useState<{
     channels: any[];
     videos: any[];
-  } | null>(null);
+  } | null>(() => {
+    try {
+      const raw = localStorage.getItem("f1_youtube_telemetry_cache");
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  });
   const [competitorData, setCompetitorData] = useState<{
     channels: any[];
     videos: any[];
   } | null>(null);
   const [instagramData, setInstagramData] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => {
+    try {
+      return !localStorage.getItem("f1_youtube_telemetry_cache");
+    } catch (e) {
+      return true;
+    }
+  });
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -217,7 +241,12 @@ export default function App() {
     } catch (e) {}
     return "30d";
   });
+    const [nicheQuery, setNicheQuery] = useState("");
+  const [isNicheResearching, setIsNicheResearching] = useState(false);
+  const [nicheData, setNicheData] = useState<any>(null);
+
   const [activeView, setActiveView] = useState<
+
     | "global"
     | "compare"
     | "historical_report"
@@ -227,6 +256,7 @@ export default function App() {
     | "ai_insights"
     | "audience"
     | "calendar"
+    | "niche_research"
     | "competitors"
     | "community"
   >("global");
@@ -245,7 +275,7 @@ export default function App() {
     | "score"
   >("recent");
   const [videoType, setVideoType] = useState<"all" | "shorts" | "long" | "podcasts">("all");
-  const [compareTimeframe, setCompareTimeframe] = useState<"week" | "month">(
+  const [compareTimeframe, setCompareTimeframe] = useState<"week" | "month" | "year" | "lifetime">(
     "week",
   );
   const [aiCategorizing, setAiCategorizing] = useState(false);
@@ -261,6 +291,242 @@ export default function App() {
     if (type === 'success') toast.success(message);
     else if (type === 'error') toast.error(message);
     else toast(message);
+  };
+
+  // ID Video Mode (Integrated Discovery Video Mode) States
+  const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => {
+    try {
+      return (localStorage.getItem("f1_dashboardMode") as DashboardMode) || "normal";
+    } catch (e) {
+      return "normal";
+    }
+  });
+  const [idVideos, setIdVideos] = useState<IDVideoItem[]>(() => getIdVideosFromStorage());
+  const [hydratedIdVideos, setHydratedIdVideos] = useState<any[]>(() => getHydratedIdVideosCache());
+  const [isIDModalOpen, setIsIDModalOpen] = useState(false);
+  const [isSyncingIdVideos, setIsSyncingIdVideos] = useState(false);
+  const [idSyncProgress, setIdSyncProgress] = useState<{
+    isSyncing: boolean;
+    completed: number;
+    total: number;
+  }>({ isSyncing: false, completed: 0, total: 0 });
+  const syncAbortControllerRef = useRef<AbortController | null>(null);
+
+  const [idBusinessFilter, setIdBusinessFilter] = useState("all");
+  const [idProductFilter, setIdProductFilter] = useState("all");
+  const [idPersonaFilter, setIdPersonaFilter] = useState("all");
+
+  const [leaderboardPage, setLeaderboardPage] = useState(1);
+  const [leaderboardPageSize, setLeaderboardPageSize] = useState(50);
+
+  const idFilteredVideos = useMemo(() => {
+    if (hydratedIdVideos.length === 0) return [];
+    return hydratedIdVideos.filter((v: any) => {
+      const meta = v._idMeta;
+      if (!meta) return true;
+      // User requirement: filter out all other teams from the table, just keep Content Team
+      if (meta.team && !meta.team.toLowerCase().includes("content")) return false;
+      if (
+        idBusinessFilter !== "all" &&
+        meta.business !== idBusinessFilter &&
+        meta.category !== idBusinessFilter
+      )
+        return false;
+      if (
+        idProductFilter !== "all" &&
+        meta.product !== idProductFilter &&
+        meta.subtopic !== idProductFilter
+      )
+        return false;
+      if (idPersonaFilter !== "all" && meta.persona !== idPersonaFilter) return false;
+      return true;
+    });
+  }, [hydratedIdVideos, idBusinessFilter, idProductFilter, idPersonaFilter]);
+
+  const availableBusinesses = useMemo(() => {
+    const set = new Set<string>();
+    idVideos.forEach((v) => {
+      if (v.team && !v.team.toLowerCase().includes("content")) return;
+      const b = v.business || v.category;
+      if (b) set.add(b);
+    });
+    return Array.from(set);
+  }, [idVideos]);
+
+  const availableProducts = useMemo(() => {
+    const set = new Set<string>();
+    idVideos.forEach((v) => {
+      if (v.team && !v.team.toLowerCase().includes("content")) return;
+      const p = v.product || v.subtopic;
+      if (p) set.add(p);
+    });
+    return Array.from(set);
+  }, [idVideos]);
+
+  const availablePersonas = useMemo(() => {
+    const set = new Set<string>();
+    idVideos.forEach((v) => {
+      if (v.team && !v.team.toLowerCase().includes("content")) return;
+      if (v.persona) set.add(v.persona);
+    });
+    return Array.from(set);
+  }, [idVideos]);
+
+  const handleCancelSync = () => {
+    if (syncAbortControllerRef.current) {
+      syncAbortControllerRef.current.abort();
+      syncAbortControllerRef.current = null;
+    }
+    setIdSyncProgress((prev) => ({ ...prev, isSyncing: false }));
+    setIsSyncingIdVideos(false);
+    toast("Live metric sync paused");
+  };
+
+  const startProgressiveSync = async (itemsToSync: IDVideoItem[]) => {
+    if (!itemsToSync || itemsToSync.length === 0) return;
+
+    if (syncAbortControllerRef.current) {
+      syncAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    syncAbortControllerRef.current = controller;
+    const signal = controller.signal;
+
+    const uniqueIds = Array.from(new Set(itemsToSync.map((i) => i.id)));
+    setIsSyncingIdVideos(true);
+    setIdSyncProgress({ isSyncing: true, completed: 0, total: uniqueIds.length });
+
+    const batchSize = 50;
+    let completed = 0;
+
+    for (let i = 0; i < uniqueIds.length; i += batchSize) {
+      if (signal.aborted) break;
+
+      const chunk = uniqueIds.slice(i, i + batchSize);
+      try {
+        const res = await fetch("/api/youtube-videos-by-id", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ videoIds: chunk }),
+          signal,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const batchVideos = data.videos || [];
+          if (batchVideos.length > 0) {
+            const batchMap = new Map<string, any>();
+            batchVideos.forEach((v: any) => batchMap.set(v.id, v));
+
+            setHydratedIdVideos((prev) => {
+              const updated = prev.map((item) => {
+                const live = batchMap.get(item.id);
+                if (live) {
+                  return {
+                    ...(live as Record<string, any>),
+                    _idMeta: item._idMeta,
+                  };
+                }
+                return item;
+              });
+              saveHydratedIdVideosCache(updated);
+              return updated;
+            });
+          }
+        }
+      } catch (err: any) {
+        if (signal.aborted) break;
+        console.warn(`Chunk sync warning:`, err);
+      }
+
+      completed += chunk.length;
+      setIdSyncProgress({
+        isSyncing: true,
+        completed: Math.min(completed, uniqueIds.length),
+        total: uniqueIds.length,
+      });
+    }
+
+    if (!signal.aborted) {
+      setIdSyncProgress({ isSyncing: false, completed: uniqueIds.length, total: uniqueIds.length });
+      setIsSyncingIdVideos(false);
+      toast.success(`Live YouTube metrics synced for ${uniqueIds.length.toLocaleString()} videos!`);
+    }
+  };
+
+  const handleSaveIdVideos = async (items: IDVideoItem[]) => {
+    if (syncAbortControllerRef.current) {
+      syncAbortControllerRef.current.abort();
+    }
+
+    try {
+      saveIdVideosToStorage(items);
+      setIdVideos(items);
+
+      if (items.length === 0) {
+        setHydratedIdVideos([]);
+        saveHydratedIdVideosCache([]);
+        setIdSyncProgress({ isSyncing: false, completed: 0, total: 0 });
+        setIsSyncingIdVideos(false);
+        showNotification("Curated ID video list cleared");
+        return;
+      }
+
+      // Optimistic instant hydration from sheet metadata (< 10ms)
+      const existingMap = new Map<string, any>();
+      hydratedIdVideos.forEach((v) => existingMap.set(v.id, v));
+
+      const initialHydrated = items.map((item) => {
+        const existing = existingMap.get(item.id);
+        if (existing) {
+          return {
+            ...existing,
+            _idMeta: item,
+          };
+        }
+        return {
+          id: item.id,
+          snippet: {
+            title: item.topic || `Video ${item.id}`,
+            publishedAt: new Date().toISOString(),
+            channelTitle: item.channelNameHint || "Loaded Channel",
+            thumbnails: {
+              default: { url: `https://img.youtube.com/vi/${item.id}/default.jpg` },
+              medium: { url: `https://img.youtube.com/vi/${item.id}/mqdefault.jpg` },
+            },
+          },
+          statistics: {
+            viewCount: "0",
+            likeCount: "0",
+            commentCount: "0",
+          },
+          _isShort: false,
+          _idMeta: item,
+        };
+      });
+
+      setHydratedIdVideos(initialHydrated);
+      saveHydratedIdVideosCache(initialHydrated);
+      setDashboardMode("id_video");
+      localStorage.setItem("f1_dashboardMode", "id_video");
+      showNotification(`Loaded ${items.length.toLocaleString()} videos from sheet! Starting background live sync...`);
+
+      // Kick off background progressive sync
+      startProgressiveSync(items);
+    } catch (err: any) {
+      console.error("Failed to save ID videos", err);
+      showNotification(err.message || "Failed to save ID videos", "error");
+    }
+  };
+
+  const handleClearIdVideos = () => {
+    saveIdVideosToStorage([]);
+    saveHydratedIdVideosCache([]);
+    setIdVideos([]);
+    setHydratedIdVideos([]);
+    setDashboardMode("normal");
+    localStorage.setItem("f1_dashboardMode", "normal");
+    showNotification("ID video list cleared. Switched to Normal Mode.");
   };
 
   const generateAiCategories = async () => {
@@ -452,20 +718,28 @@ export default function App() {
     allChannels.forEach((c) => uniqueChannelsMap.set(c.id, c));
     const uniqueChannels = Array.from(uniqueChannelsMap.values());
 
-    const allVideos = [
-      ...(youtubeData?.videos || []),
-      ...(competitorData?.videos || []),
-    ];
+    const allVideos = dashboardMode === "id_video"
+      ? idFilteredVideos
+      : [
+          ...(youtubeData?.videos || []),
+          ...(competitorData?.videos || []),
+        ];
     const uniqueVideosMap = new Map();
     allVideos.forEach((v) => uniqueVideosMap.set(v.id, v));
     const uniqueVideos = Array.from(uniqueVideosMap.values());
 
     const now = new Date().getTime();
-    const currentRangeMs =
-      compareTimeframe === "week"
-        ? 7 * 24 * 60 * 60 * 1000
-        : 30 * 24 * 60 * 60 * 1000;
-    const previousRangeMs = currentRangeMs * 2;
+    let currentRangeMs = 0;
+    if (compareTimeframe === "week") {
+      currentRangeMs = 7 * 24 * 60 * 60 * 1000;
+    } else if (compareTimeframe === "month") {
+      currentRangeMs = 30 * 24 * 60 * 60 * 1000;
+    } else if (compareTimeframe === "year") {
+      currentRangeMs = 365 * 24 * 60 * 60 * 1000;
+    } else if (compareTimeframe === "lifetime") {
+      currentRangeMs = Infinity;
+    }
+    const previousRangeMs = currentRangeMs === Infinity ? Infinity : currentRangeMs * 2;
 
     return uniqueChannels
       .map((channel: any) => {
@@ -478,49 +752,110 @@ export default function App() {
           return diff <= currentRangeMs;
         });
 
-        const previousVids = channelVids.filter((v: any) => {
+        const previousVids = compareTimeframe === "lifetime" ? [] : channelVids.filter((v: any) => {
           const diff = now - new Date(v.snippet.publishedAt).getTime();
           return diff > currentRangeMs && diff <= previousRangeMs;
         });
 
-        const currentViews = currentVids.reduce(
-          (sum: number, v: any) => sum + Number(v.statistics.viewCount || 0),
-          0,
-        );
-        const previousViews = previousVids.reduce(
-          (sum: number, v: any) => sum + Number(v.statistics.viewCount || 0),
-          0,
-        );
+        let currentViews = 0;
+        let previousViews = 0;
+        let currentUploads = 0;
+        let previousUploads = 0;
+        let currentLikes = 0;
+        let previousLikes = 0;
+        let currentComments = 0;
+        let previousComments = 0;
+        
+        const channelAgeMs = Math.max(1, now - new Date(channel.snippet.publishedAt).getTime());
+        const lifetimeViews = Number(channel.statistics?.viewCount || 0);
+        const lifetimeUploads = Number(channel.statistics?.videoCount || 0);
+        const dailyViewsAvg = lifetimeViews / (channelAgeMs / (1000 * 60 * 60 * 24));
+        const dailyUploadsAvg = lifetimeUploads / (channelAgeMs / (1000 * 60 * 60 * 24));
+        
+        const earliestFetchedDate = channelVids.length > 0 
+          ? new Date(channelVids[channelVids.length - 1].snippet.publishedAt).getTime()
+          : now;
 
-        const currentLikes = currentVids.reduce(
-          (sum: number, v: any) => sum + Number(v.statistics.likeCount || 0),
-          0,
-        );
-        const currentComments = currentVids.reduce(
-          (sum: number, v: any) => sum + Number(v.statistics.commentCount || 0),
-          0,
-        );
+        if (dashboardMode === "id_video") {
+          currentViews = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0), 0);
+          currentUploads = currentVids.length;
+          currentLikes = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.likeCount || 0), 0);
+          currentComments = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.commentCount || 0), 0);
 
-        const previousLikes = previousVids.reduce(
-          (sum: number, v: any) => sum + Number(v.statistics.likeCount || 0),
-          0,
-        );
-        const previousComments = previousVids.reduce(
-          (sum: number, v: any) => sum + Number(v.statistics.commentCount || 0),
-          0,
-        );
+          previousViews = previousVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0), 0);
+          previousUploads = previousVids.length;
+          previousLikes = previousVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.likeCount || 0), 0);
+          previousComments = previousVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.commentCount || 0), 0);
+        } else if (compareTimeframe === "lifetime") {
+          currentViews = lifetimeViews;
+          currentUploads = lifetimeUploads;
+          // Approximate likes and comments based on fetched sample ratio
+          const fetchedViews = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0), 0);
+          const scale = fetchedViews > 0 && currentViews > fetchedViews ? currentViews / fetchedViews : 1;
+          currentLikes = Math.round(currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.likeCount || 0), 0) * scale);
+          currentComments = Math.round(currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.commentCount || 0), 0) * scale);
+        } else {
+          // Current period
+          const exactCurrentViews = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0), 0);
+          const exactCurrentUploads = currentVids.length;
+          const currentStart = now - currentRangeMs;
+          if (earliestFetchedDate > currentStart) {
+            const missingDays = Math.max(0, (earliestFetchedDate - currentStart) / (1000 * 60 * 60 * 24));
+            currentViews = Math.round(exactCurrentViews + missingDays * dailyViewsAvg);
+            currentUploads = Math.round(exactCurrentUploads + missingDays * dailyUploadsAvg);
+          } else {
+            currentViews = exactCurrentViews;
+            currentUploads = exactCurrentUploads;
+          }
+          currentLikes = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.likeCount || 0), 0);
+          currentComments = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.commentCount || 0), 0);
+          
+          // Previous period
+          const exactPreviousViews = previousVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0), 0);
+          const exactPreviousUploads = previousVids.length;
+          const previousStart = now - previousRangeMs;
+          if (earliestFetchedDate > previousStart) {
+            const missingDays = Math.max(0, (Math.min(earliestFetchedDate, currentStart) - previousStart) / (1000 * 60 * 60 * 24));
+            previousViews = Math.round(exactPreviousViews + missingDays * dailyViewsAvg);
+            previousUploads = Math.round(exactPreviousUploads + missingDays * dailyUploadsAvg);
+          } else {
+            previousViews = exactPreviousViews;
+            previousUploads = exactPreviousUploads;
+          }
+          previousLikes = previousVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.likeCount || 0), 0);
+          previousComments = previousVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.commentCount || 0), 0);
+        }
 
-        const currentShortsCount = currentVids.filter(
-          (v: any) => v._isShort,
-        ).length;
-        const currentLongsCount = currentVids.length - currentShortsCount;
+        const exactCurrentViewsForRatios = currentVids.reduce((sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0), 0);
+        let currentShortsCount = currentVids.filter((v: any) => v._isShort).length;
+        let currentLongsCount = currentVids.length - currentShortsCount;
 
-        const currentShortsViews = currentVids
+        let currentShortsViews = currentVids
           .filter((v: any) => v._isShort)
           .reduce(
-            (sum: number, v: any) => sum + Number(v.statistics.viewCount || 0),
+            (sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0),
             0,
           );
+        
+        if (exactCurrentViewsForRatios > 0 && currentViews > exactCurrentViewsForRatios) {
+           const scale = currentViews / exactCurrentViewsForRatios;
+           currentShortsViews = Math.round(currentShortsViews * scale);
+           
+           const exactUploads = currentVids.length;
+           const scaleUploads = exactUploads > 0 ? currentUploads / exactUploads : 1;
+           currentShortsCount = Math.round(currentShortsCount * scaleUploads);
+           currentLongsCount = currentUploads - currentShortsCount;
+        } else if (compareTimeframe === "lifetime") {
+           // Use approximate ratios for lifetime
+           const scale = exactCurrentViewsForRatios > 0 ? currentViews / exactCurrentViewsForRatios : 1;
+           currentShortsViews = Math.round(currentShortsViews * scale);
+           
+           const exactUploads = currentVids.length;
+           const scaleUploads = exactUploads > 0 ? currentUploads / exactUploads : 1;
+           currentShortsCount = Math.round(currentShortsCount * scaleUploads);
+           currentLongsCount = currentUploads - currentShortsCount;
+        }
+        
         const currentLongsViews = currentViews - currentShortsViews;
 
         const currentEngagement =
@@ -536,10 +871,10 @@ export default function App() {
               100
             : 0;
 
-        const currentAvgViews = currentVids.length > 0 ? currentViews / currentVids.length : 0;
-        const currentViewToSubRatio = Number(channel.statistics.subscriberCount) > 0 ? (currentAvgViews / Number(channel.statistics.subscriberCount)) * 100 : 0;
-        const previousAvgViews = previousVids.length > 0 ? previousViews / previousVids.length : 0;
-        const previousViewToSubRatio = Number(channel.statistics.subscriberCount) > 0 ? (previousAvgViews / Number(channel.statistics.subscriberCount)) * 100 : 0;
+        const currentAvgViews = currentUploads > 0 ? currentViews / currentUploads : 0;
+        const currentViewToSubRatio = Number(channel.statistics?.subscriberCount) > 0 ? (currentAvgViews / Number(channel.statistics.subscriberCount)) * 100 : 0;
+        const previousAvgViews = previousUploads > 0 ? previousViews / previousUploads : 0;
+        const previousViewToSubRatio = Number(channel.statistics?.subscriberCount) > 0 ? (previousAvgViews / Number(channel.statistics.subscriberCount)) * 100 : 0;
 
         const topCurrentVideo =
           currentVids.sort(
@@ -554,6 +889,8 @@ export default function App() {
           previousVids,
           currentViews,
           previousViews,
+          currentUploads,
+          previousUploads,
           currentLikes,
           currentComments,
           previousLikes,
@@ -570,9 +907,9 @@ export default function App() {
         };
       })
       .sort((a: any, b: any) => b.currentViews - a.currentViews);
-  }, [youtubeData, competitorData, compareTimeframe]);
+  }, [youtubeData, competitorData, compareTimeframe, dashboardMode, idFilteredVideos]);
 
-  const [reportTimeframe, setReportTimeframe] = useState<"weekly" | "monthly">(
+  const [reportTimeframe, setReportTimeframe] = useState<"weekly" | "monthly" | "lifetime" | "yoy">(
     "weekly",
   );
   const [reportVideoFilter, setReportVideoFilter] = useState<"all" | "shorts" | "longs" | "podcasts">(
@@ -588,10 +925,12 @@ export default function App() {
     allChannels.forEach((c) => uniqueChannelsMap.set(c.id, c));
     const uniqueChannels = Array.from(uniqueChannelsMap.values());
 
-    const allVideos = [
-      ...(youtubeData?.videos || []),
-      ...(competitorData?.videos || []),
-    ];
+    const allVideos = dashboardMode === "id_video"
+      ? idFilteredVideos
+      : [
+          ...(youtubeData?.videos || []),
+          ...(competitorData?.videos || []),
+        ];
     const uniqueVideosMap = new Map();
     allVideos.forEach((v) => uniqueVideosMap.set(v.id, v));
     const uniqueVideos = Array.from(uniqueVideosMap.values());
@@ -624,7 +963,7 @@ export default function App() {
           end,
         });
       }
-    } else {
+    } else if (reportTimeframe === "monthly") {
       for (let i = 1; i >= 0; i--) {
         const start = new Date(
           now.getTime() - (i + 1) * 30 * 24 * 60 * 60 * 1000,
@@ -647,6 +986,29 @@ export default function App() {
           end,
         });
       }
+    } else if (reportTimeframe === "yoy") {
+      const pyStart = new Date(now.getFullYear() - 1, 0, 1);
+      const pyEnd = new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59, 999);
+      periods.push({
+        name: `${now.getFullYear() - 1}`,
+        label: "Previous Year",
+        start: pyStart,
+        end: pyEnd,
+      });
+      const cyStart = new Date(now.getFullYear(), 0, 1);
+      periods.push({
+        name: `${now.getFullYear()}`,
+        label: "Current Year",
+        start: cyStart,
+        end: now,
+      });
+    } else if (reportTimeframe === "lifetime") {
+      periods.push({
+        name: "Lifetime",
+        label: "All Time",
+        start: new Date(0),
+        end: now,
+      });
     }
 
     const channelStats = uniqueChannels
@@ -657,6 +1019,7 @@ export default function App() {
 
         const periodStats = periods.map((p) => {
           let vids = channelVideos.filter((v: any) => {
+            if (p.name === "Lifetime") return true;
             const pubDate = new Date(v.snippet.publishedAt);
             return pubDate >= p.start && pubDate <= p.end;
           });
@@ -678,10 +1041,51 @@ export default function App() {
             });
           }
 
-          const views = vids.reduce(
+          let views = vids.reduce(
             (sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0),
             0,
           );
+          
+          let uploads = vids.length;
+          let estSubs = 0;
+
+          if (dashboardMode === "id_video") {
+             // In ID Video Mode, telemetry is strictly scoped to curated team deliverables!
+             // Uploads & views are exact (no daily average extrapolation).
+             // Estimated subscribers proportional to views driven by these videos:
+             const totalSubs = Number(channel.statistics?.subscriberCount) || 0;
+             const totalViews = Number(channel.statistics?.viewCount) || 1;
+             estSubs = Math.round((views / totalViews) * totalSubs);
+          } else {
+             const channelAgeMs = Math.max(1, Date.now() - new Date(channel.snippet.publishedAt).getTime());
+             const lifetimeViews = Number(channel.statistics?.viewCount || 0);
+             const lifetimeUploads = Number(channel.statistics?.videoCount || 0);
+             const dailyViewsAvg = lifetimeViews / (channelAgeMs / (1000 * 60 * 60 * 24));
+             const dailyUploadsAvg = lifetimeUploads / (channelAgeMs / (1000 * 60 * 60 * 24));
+             
+             const earliestFetchedDate = channelVideos.length > 0 
+               ? new Date(channelVideos[channelVideos.length - 1].snippet.publishedAt).getTime()
+               : Date.now();
+
+             if (p.name === "Lifetime") {
+                views = lifetimeViews;
+                uploads = lifetimeUploads;
+                estSubs = Number(channel.statistics?.subscriberCount) || 0;
+             } else {
+                if (earliestFetchedDate > p.start.getTime()) {
+                   const missingStart = p.start.getTime();
+                   const missingEnd = Math.min(p.end.getTime(), earliestFetchedDate);
+                   const missingDays = Math.max(0, (missingEnd - missingStart) / (1000 * 60 * 60 * 24));
+                   
+                   views = Math.round(views + missingDays * dailyViewsAvg);
+                   uploads = Math.round(uploads + missingDays * dailyUploadsAvg);
+                }
+                const totalSubs = Number(channel.statistics?.subscriberCount) || 0;
+                const totalViews = Number(channel.statistics?.viewCount) || 1;
+                estSubs = Math.round((views / totalViews) * totalSubs);
+             }
+          }
+          
           const shortsViews = shorts.reduce(
             (sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0),
             0,
@@ -690,13 +1094,9 @@ export default function App() {
             (sum: number, v: any) => sum + Number(v.statistics?.viewCount || 0),
             0,
           );
-
-          const uploads = vids.length;
           const shortsUploads = shorts.length;
           const longsUploads = longs.length;
 
-          const estSubs = Math.round(views * 0.005);
-          
           const avgViews = uploads > 0 ? views / uploads : 0;
           const subs = Number(channel.statistics?.subscriberCount) || 1;
           const viewToSubRatio = (avgViews / subs) * 100;
@@ -841,7 +1241,7 @@ export default function App() {
       );
 
     return { periods, channelStats };
-  }, [youtubeData, competitorData, reportTimeframe, aiCategoriesMap, reportVideoFilter]);
+  }, [youtubeData, competitorData, reportTimeframe, aiCategoriesMap, reportVideoFilter, dashboardMode, idFilteredVideos]);
 
   const predictiveMilestone = useMemo(() => {
     if (!selectedAudienceChannelId || !youtubeData?.channels) return null;
@@ -1046,18 +1446,26 @@ export default function App() {
   };
 
   const sortedVideos = useMemo(() => {
-    if (!youtubeData?.videos) return [];
-    const now = new Date().getTime();
-    const rangeMs =
-      timeRange === "24h"
-        ? 24 * 60 * 60 * 1000
-        : timeRange === "7d"
-          ? 7 * 24 * 60 * 60 * 1000
-          : 30 * 24 * 60 * 60 * 1000;
+    const baseVideos = dashboardMode === "id_video"
+      ? idFilteredVideos
+      : (youtubeData?.videos || []);
+    if (!baseVideos || baseVideos.length === 0) return [];
 
-    let videos = youtubeData.videos.filter(
-      (v) => now - new Date(v.snippet.publishedAt).getTime() <= rangeMs,
-    );
+    let videos = baseVideos;
+
+    if (dashboardMode === "normal") {
+      const now = new Date().getTime();
+      const rangeMs =
+        timeRange === "24h"
+          ? 24 * 60 * 60 * 1000
+          : timeRange === "7d"
+            ? 7 * 24 * 60 * 60 * 1000
+            : 30 * 24 * 60 * 60 * 1000;
+
+      videos = baseVideos.filter(
+        (v) => now - new Date(v.snippet.publishedAt).getTime() <= rangeMs,
+      );
+    }
 
     if (videoType === "shorts") {
       videos = videos.filter((v) => v._isShort);
@@ -1138,7 +1546,14 @@ export default function App() {
       }
       return 0;
     });
-  }, [youtubeData, videoSort, timeRange, videoType]);
+  }, [youtubeData, videoSort, timeRange, videoType, dashboardMode, idFilteredVideos]);
+
+  const totalLeaderboardPages = Math.max(1, Math.ceil(sortedVideos.length / leaderboardPageSize));
+  const validLeaderboardPage = Math.min(leaderboardPage, totalLeaderboardPages);
+  const paginatedLeaderboardVideos = useMemo(() => {
+    const start = (validLeaderboardPage - 1) * leaderboardPageSize;
+    return sortedVideos.slice(start, start + leaderboardPageSize);
+  }, [sortedVideos, validLeaderboardPage, leaderboardPageSize]);
 
   const algoStats = useMemo(() => {
     if (!sortedVideos || sortedVideos.length === 0)
@@ -1301,8 +1716,36 @@ export default function App() {
       .map(([word, score]) => ({ word, score: Math.round(score) }));
   }, [competitorData]);
 
+
+  const handleNicheResearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nicheQuery.trim()) return;
+    
+    setIsNicheResearching(true);
+    setNicheData(null);
+    try {
+      const keys = getKeysFromStorage();
+      if (!keys || !keys.youtubeKey) {
+        toast.error("Please configure your YouTube API key in settings first.");
+        return;
+      }
+      
+      const data = await fetchNicheResearch(nicheQuery, keys);
+      setNicheData(data);
+      toast.success("Research complete!");
+    } catch (err: any) {
+      toast.error("Niche Research failed: " + err.message);
+    } finally {
+      setIsNicheResearching(false);
+    }
+  };
+
   const loadData = useCallback(async (keys?: DashboardKeys) => {
-    setIsLoading(true);
+    // Only block screen if we have zero cached YouTube data
+    const hasCache = !!localStorage.getItem("f1_youtube_telemetry_cache");
+    if (!hasCache) {
+      setIsLoading(true);
+    }
     setError(null);
     try {
       const status = await checkStatus(keys);
@@ -1311,6 +1754,9 @@ export default function App() {
       if (status.configured.youtube) {
         const ytData = await fetchYouTubeData(keys);
         setYoutubeData(ytData);
+        try {
+          localStorage.setItem("f1_youtube_telemetry_cache", JSON.stringify(ytData));
+        } catch (e) {}
 
         try {
           const compData = await fetchYouTubeCompetitors(keys);
@@ -1408,6 +1854,68 @@ export default function App() {
               <Settings className="w-4 h-4" />
             </button>
           </div>
+
+          {/* Mode Switcher: Normal Mode vs ID Video Mode */}
+          <div className="flex items-center gap-2 pl-2 border-l border-gray-200 dark:border-white/10">
+            <div className="flex items-center bg-gray-100 dark:bg-white/10 p-0.5 rounded-lg border border-gray-200 dark:border-white/10">
+              <button
+                onClick={() => {
+                  setDashboardMode("normal");
+                  localStorage.setItem("f1_dashboardMode", "normal");
+                  showNotification("Switched to Normal Mode (Whole Channel)");
+                }}
+                className={`px-3 py-1 text-xs font-black uppercase tracking-wider rounded transition-all ${
+                  dashboardMode === "normal"
+                    ? "bg-white text-gray-900 shadow-sm dark:bg-[#1f1f1f] dark:text-white"
+                    : "text-gray-500 hover:text-gray-900 dark:hover:text-white"
+                }`}
+              >
+                Normal Mode
+              </button>
+              <button
+                onClick={() => {
+                  if (idVideos.length === 0) {
+                    setIsIDModalOpen(true);
+                  } else {
+                    setDashboardMode("id_video");
+                    localStorage.setItem("f1_dashboardMode", "id_video");
+                    showNotification("Switched to ID Video Mode (Integrated Discovery)");
+                  }
+                }}
+                className={`px-3 py-1 text-xs font-black uppercase tracking-wider rounded flex items-center gap-1.5 transition-all ${
+                  dashboardMode === "id_video"
+                    ? "bg-emerald-600 text-white shadow-sm"
+                    : "text-gray-500 hover:text-gray-900 dark:hover:text-white"
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                ID Video Mode
+                {idVideos.length > 0 && (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                      dashboardMode === "id_video"
+                        ? "bg-black/30 text-white"
+                        : "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                    }`}
+                  >
+                    {idVideos.length}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <button
+              onClick={() => setIsIDModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+              title="Import or Manage Curated ID Video Sheet"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span className="hidden sm:inline">ID Sheet</span>
+              {idVideos.length > 0 && (
+                <span className="font-mono text-[11px]">({idVideos.length})</span>
+              )}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1439,6 +1947,113 @@ export default function App() {
           </div>
         ) : (
           <>
+            {/* ID Video Mode Banner & Slicers when Active */}
+            {dashboardMode === "id_video" && (
+              <div className="mb-6 p-4 rounded-xl border border-emerald-500/30 bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                        ⚡ ID Video Mode Active (Integrated Discovery)
+                      </span>
+                      <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
+                        {idFilteredVideos.length} / {idVideos.length} Curated Videos
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
+                      All reports, notepad comparisons, and leaderboards are scoped strictly to your team's spreadsheet deliverables.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 whitespace-nowrap flex items-center gap-1">
+                    <span>✓ Content Team Only</span>
+                  </div>
+
+                  {availableBusinesses.length > 1 && (
+                    <div className="flex items-center gap-1.5 text-xs bg-white dark:bg-black/50 px-2.5 py-1 rounded-lg border border-gray-200 dark:border-white/10">
+                      <span className="text-gray-500 font-bold uppercase text-[9px]">Business:</span>
+                      <select
+                        value={idBusinessFilter}
+                        onChange={(e) => setIdBusinessFilter(e.target.value)}
+                        className="text-xs font-bold bg-transparent text-gray-900 dark:text-white focus:outline-none"
+                      >
+                        <option value="all">All ({availableBusinesses.length})</option>
+                        {availableBusinesses.map((b) => (
+                          <option key={b} value={b}>{formatLabel(b)}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {availableProducts.length > 1 && (
+                    <div className="flex items-center gap-1.5 text-xs bg-white dark:bg-black/50 px-2.5 py-1 rounded-lg border border-gray-200 dark:border-white/10">
+                      <span className="text-gray-500 font-bold uppercase text-[9px]">Product:</span>
+                      <select
+                        value={idProductFilter}
+                        onChange={(e) => setIdProductFilter(e.target.value)}
+                        className="text-xs font-bold bg-transparent text-gray-900 dark:text-white focus:outline-none"
+                      >
+                        <option value="all">All ({availableProducts.length})</option>
+                        {availableProducts.map((p) => (
+                          <option key={p} value={p}>{formatLabel(p)}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {availablePersonas.length > 1 && (
+                    <div className="flex items-center gap-1.5 text-xs bg-white dark:bg-black/50 px-2.5 py-1 rounded-lg border border-gray-200 dark:border-white/10">
+                      <span className="text-gray-500 font-bold uppercase text-[9px]">Persona:</span>
+                      <select
+                        value={idPersonaFilter}
+                        onChange={(e) => setIdPersonaFilter(e.target.value)}
+                        className="text-xs font-bold bg-transparent text-gray-900 dark:text-white focus:outline-none"
+                      >
+                        <option value="all">All ({availablePersonas.length})</option>
+                        {availablePersonas.map((p) => (
+                          <option key={p} value={p}>{p}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {idSyncProgress.isSyncing ? (
+                    <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-lg">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-600 dark:text-emerald-400" />
+                      <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-300">
+                        Syncing: {idSyncProgress.completed.toLocaleString()} / {idSyncProgress.total.toLocaleString()} ({Math.round((idSyncProgress.completed / Math.max(1, idSyncProgress.total)) * 100)}%)
+                      </span>
+                      <button
+                        onClick={handleCancelSync}
+                        className="ml-1 px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-gray-200 dark:bg-white/10 hover:bg-red-500 hover:text-white transition-colors"
+                      >
+                        Pause
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startProgressiveSync(idVideos)}
+                      disabled={idVideos.length === 0}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                      title="Fetch live view counts and velocity from YouTube"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Sync Live Stats</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => setIsIDModalOpen(true)}
+                    className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+                  >
+                    Edit Sheet
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-6 border-b border-gray-200 dark:border-white/10 mb-6 pb-0 overflow-x-auto custom-scrollbar">
               <button
                 onClick={() => setActiveView("global")}
@@ -1482,6 +2097,13 @@ export default function App() {
               >
                 <Sparkles className="w-4 h-4" /> AI Insights
               </button>
+              <button
+                onClick={() => setActiveView("niche_research")}
+                className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === "niche_research" ? "text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]" : "text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent"}`}
+              >
+                <Target className="w-4 h-4" /> Niche Research
+              </button>
+
               <button
                 onClick={() => setActiveView("audience")}
                 className={`text-sm font-black uppercase tracking-widest px-2 py-3 whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00ff00] rounded flex items-center gap-2 ${activeView === "audience" ? "text-[#00b300] dark:text-[#00ff00] border-b-2 border-[#00b300] dark:border-[#00ff00] -mb-[1px]" : "text-gray-500 hover:text-gray-900 dark:hover:text-white border-b-2 border-transparent"}`}
@@ -1929,6 +2551,18 @@ export default function App() {
                     >
                       Monthly
                     </button>
+                    <button
+                      onClick={() => setReportTimeframe("yoy")}
+                      className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportTimeframe === "yoy" ? "bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00]" : "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-white/20"}`}
+                    >
+                      YoY
+                    </button>
+                    <button
+                      onClick={() => setReportTimeframe("lifetime")}
+                      className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${reportTimeframe === "lifetime" ? "bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00]" : "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-white/20"}`}
+                    >
+                      Lifetime
+                    </button>
                   </div>
                 </div>
 
@@ -2214,6 +2848,18 @@ export default function App() {
                     >
                       MoM
                     </button>
+                    <button
+                      onClick={() => setCompareTimeframe("year")}
+                      className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${compareTimeframe === "year" ? "bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00]" : "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-white/20"}`}
+                    >
+                      YoY
+                    </button>
+                    <button
+                      onClick={() => setCompareTimeframe("lifetime")}
+                      className={`px-3 py-1 text-[9px] font-bold uppercase tracking-widest rounded-sm transition-colors ${compareTimeframe === "lifetime" ? "bg-[#00b300] text-white dark:bg-[#00ff00]/20 dark:text-[#00ff00]" : "bg-gray-200 dark:bg-white/10 text-gray-900 dark:text-white hover:bg-gray-300 dark:hover:bg-white/20"}`}
+                    >
+                      Lifetime
+                    </button>
                   </div>
                 </div>
                 {!notepadData || notepadData.length === 0 ? (
@@ -2228,6 +2874,8 @@ export default function App() {
                         currentVids,
                         currentViews,
                         previousViews,
+                        currentUploads,
+                        previousUploads,
                         currentLikes,
                         previousLikes,
                         currentComments,
@@ -2307,7 +2955,7 @@ export default function App() {
                                   Uploads
                                 </div>
                                 <div className="font-mono text-lg font-bold text-gray-900 dark:text-white">
-                                  {currentVids.length}{" "}
+                                  {currentUploads}{" "}
                                   <span className="text-xs font-sans text-gray-500 font-normal">
                                     total
                                   </span>
@@ -2341,7 +2989,11 @@ export default function App() {
                                   Views (
                                   {compareTimeframe === "week"
                                     ? "7 Days"
-                                    : "30 Days"}
+                                    : compareTimeframe === "month"
+                                    ? "30 Days"
+                                    : compareTimeframe === "year"
+                                    ? "365 Days"
+                                    : "Lifetime"}
                                   )
                                 </div>
                                 <div className="font-mono text-lg font-bold text-gray-900 dark:text-white">
@@ -2729,14 +3381,16 @@ export default function App() {
                       No video data available
                     </div>
                   ) : (
-                    sortedVideos.map((video: any, idx: number) => (
+                    paginatedLeaderboardVideos.map((video: any, idx: number) => {
+                      const rankIdx = (validLeaderboardPage - 1) * leaderboardPageSize + idx + 1;
+                      return (
                       <div
                         key={video.id}
                         className="flex flex-col bg-white dark:bg-black/40 border border-gray-200 dark:border-white/5 hover:border-[#00b300] dark:hover:border-[#00ff00]/50 p-2 rounded transition-all group relative"
                       >
                         <div className="flex items-center gap-4">
                           <div className="text-xl font-black italic text-gray-600 w-8 text-center group-hover:text-[#00b300] dark:group-hover:text-[#00ff00] transition-colors">
-                            {idx + 1}
+                            {rankIdx}
                           </div>
                           <a
                             href={`https://www.youtube.com/watch?v=${video.id}`}
@@ -2768,7 +3422,7 @@ export default function App() {
                             >
                               {video.snippet.title}
                             </a>
-                            <div className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest">
+                            <div className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest flex items-center flex-wrap gap-2">
                               <span className="text-[#00b300] dark:text-[#00ff00] font-bold">
                                 {video.snippet.channelTitle}
                               </span>{" "}
@@ -2776,6 +3430,34 @@ export default function App() {
                               {formatDistanceToNow(
                                 new Date(video.snippet.publishedAt),
                                 { addSuffix: true },
+                              )}
+                              {video._idMeta && (
+                                <span className="flex items-center gap-1.5 ml-2 normal-case">
+                                  {(video._idMeta.product || video._idMeta.subtopic) && (
+                                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                                      🏷️ {formatLabel(video._idMeta.product || video._idMeta.subtopic)}
+                                    </span>
+                                  )}
+                                  {(video._idMeta.business || video._idMeta.category) && (
+                                    <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
+                                      💼 {formatLabel(video._idMeta.business || video._idMeta.category)}
+                                    </span>
+                                  )}
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-gray-100 dark:bg-white/10 text-gray-700 dark:text-gray-300">
+                                    Content Team
+                                  </span>
+                                  {video._idMeta.playbookUrl && (
+                                    <a
+                                      href={video._idMeta.playbookUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="px-1.5 py-0.5 rounded text-[9px] bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-0.5 font-sans"
+                                      title="Open Playbook Storyboard / Brief"
+                                    >
+                                      Playbook <ExternalLink className="w-2.5 h-2.5" />
+                                    </a>
+                                  )}
+                                </span>
                               )}
                             </div>
                           </div>
@@ -2925,9 +3607,62 @@ export default function App() {
                           </div>
                         )}
                       </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
+
+                {/* Leaderboard Pagination Controls */}
+                {sortedVideos.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-gray-200 dark:border-white/10 mt-2 text-xs">
+                    <div className="flex items-center gap-2 text-gray-500 font-mono">
+                      <span>
+                        Showing {((validLeaderboardPage - 1) * leaderboardPageSize + 1).toLocaleString()} - {Math.min(validLeaderboardPage * leaderboardPageSize, sortedVideos.length).toLocaleString()} of {sortedVideos.length.toLocaleString()} videos
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] uppercase font-bold text-gray-400">Rows:</span>
+                        <select
+                          value={leaderboardPageSize}
+                          onChange={(e) => {
+                            setLeaderboardPageSize(Number(e.target.value));
+                            setLeaderboardPage(1);
+                          }}
+                          className="bg-transparent border border-gray-200 dark:border-white/10 rounded px-2 py-1 text-xs font-bold text-gray-800 dark:text-gray-200 focus:outline-none"
+                        >
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                          <option value={100}>100</option>
+                          <option value={250}>250</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setLeaderboardPage((p) => Math.max(1, p - 1))}
+                          disabled={validLeaderboardPage <= 1}
+                          className="px-2.5 py-1 rounded border border-gray-200 dark:border-white/10 text-xs font-bold uppercase tracking-wider disabled:opacity-30 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors"
+                        >
+                          Prev
+                        </button>
+
+                        <span className="font-mono text-xs font-bold px-2">
+                          {validLeaderboardPage} / {totalLeaderboardPages}
+                        </span>
+
+                        <button
+                          onClick={() => setLeaderboardPage((p) => Math.min(totalLeaderboardPages, p + 1))}
+                          disabled={validLeaderboardPage >= totalLeaderboardPages}
+                          className="px-2.5 py-1 rounded border border-gray-200 dark:border-white/10 text-xs font-bold uppercase tracking-wider disabled:opacity-30 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -3117,6 +3852,107 @@ export default function App() {
                     })
                   )}
                 </div>
+              </div>
+            )}
+
+            
+            {activeView === "niche_research" && (
+              <div className="space-y-6">
+                <div className="bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-lg p-6">
+                  <div className="flex items-center gap-3 mb-6">
+                    <Target className="w-6 h-6 text-[#00b300] dark:text-[#00ff00]" />
+                    <div>
+                      <h2 className="text-xl font-black uppercase tracking-tighter">Niche & Competitor Research</h2>
+                      <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mt-1">Discover trending topics, get AI content ideas, and find unknown competitors.</p>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleNicheResearch} className="flex gap-4">
+                    <input
+                      type="text"
+                      value={nicheQuery}
+                      onChange={(e) => setNicheQuery(e.target.value)}
+                      placeholder="Enter a niche or topic (e.g., study hacks for students, minimalist desk setup)"
+                      className="flex-1 bg-gray-50 dark:bg-black/50 border border-gray-200 dark:border-white/10 rounded p-3 text-sm focus:outline-none focus:border-[#00b300] dark:focus:border-[#00ff00] transition-colors"
+                      disabled={isNicheResearching}
+                    />
+                    <button
+                      type="submit"
+                      disabled={isNicheResearching || !nicheQuery.trim()}
+                      className="bg-[#00b300] dark:bg-[#00ff00] text-black font-black uppercase tracking-widest text-xs px-6 py-3 rounded hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {isNicheResearching ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Search className="w-4 h-4" />
+                      )}
+                      Analyze
+                    </button>
+                  </form>
+                </div>
+
+                {nicheData && (
+                  <div className="space-y-6">
+                    {/* Trending Topics */}
+                    {nicheData.trendingTopics && nicheData.trendingTopics.length > 0 && (
+                      <div className="bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-lg p-6">
+                        <h3 className="text-sm font-black uppercase tracking-widest text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                          <TrendingUp className="w-4 h-4 text-blue-500" /> Current Trending Sub-topics
+                        </h3>
+                        <div className="flex flex-wrap gap-2">
+                          {nicheData.trendingTopics.map((topic: string, i: number) => (
+                            <span key={i} className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 text-xs font-bold px-3 py-1.5 rounded-full uppercase tracking-wider">
+                              {topic}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {/* Content Ideas */}
+                      <div className="bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-lg p-6">
+                        <h3 className="text-sm font-black uppercase tracking-widest text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                          <Lightbulb className="w-4 h-4 text-yellow-500" /> High-Potential Video Ideas
+                        </h3>
+                        <div className="space-y-4">
+                          {nicheData.contentIdeas?.map((idea: any, i: number) => (
+                            <div key={i} className="border border-gray-100 dark:border-white/5 rounded p-4 hover:border-yellow-500/30 transition-colors bg-gray-50 dark:bg-black/20">
+                              <div className="flex items-start justify-between gap-4 mb-2">
+                                <h4 className="font-bold text-sm text-gray-900 dark:text-white">{idea.title}</h4>
+                                <span className="text-[10px] font-bold uppercase tracking-wider bg-gray-200 dark:bg-white/10 px-2 py-0.5 rounded text-gray-600 dark:text-gray-300 shrink-0">
+                                  {idea.format}
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+                                <span className="font-bold text-gray-900 dark:text-gray-300">Why it works:</span> {idea.rationale}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Discovered Competitors */}
+                      <div className="bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-white/10 rounded-lg p-6">
+                        <h3 className="text-sm font-black uppercase tracking-widest text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                          <Compass className="w-4 h-4 text-purple-500" /> Discovered Competitors
+                        </h3>
+                        <div className="space-y-4">
+                          {nicheData.discoveredCompetitors?.map((comp: any, i: number) => (
+                            <div key={i} className="border border-gray-100 dark:border-white/5 rounded p-4 hover:border-purple-500/30 transition-colors bg-gray-50 dark:bg-black/20">
+                              <h4 className="font-black text-sm uppercase tracking-wider text-gray-900 dark:text-white mb-2">
+                                {comp.channelName}
+                              </h4>
+                              <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+                                <span className="font-bold text-gray-900 dark:text-gray-300">Analysis:</span> {comp.analysis}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -4318,6 +5154,16 @@ export default function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onSave={handleSettingsSave}
+      />
+
+      <IDVideoModal
+        isOpen={isIDModalOpen}
+        onClose={() => setIsIDModalOpen(false)}
+        idVideos={idVideos}
+        hydratedVideos={hydratedIdVideos}
+        onSaveIdVideos={handleSaveIdVideos}
+        onClearIdVideos={handleClearIdVideos}
+        isSyncing={isSyncingIdVideos}
       />
 
       {hoveredVideo && (

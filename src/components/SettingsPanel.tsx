@@ -192,15 +192,18 @@ export function SettingsPanel({ isOpen, onClose, onSave }: SettingsPanelProps) {
             <button
               onClick={() => {
                 setYoutubeKey("AIzaSyAkNHRr0C0wYbKK5pJVytMwBnRSDau_GMs");
-                setYoutubeChannels([{ name: "Kalvium", channel_id: "UCg6n0KpFmhje8kjjBOCRtGg" }]);
-                setYoutubeCompetitors([
-                  { name: "Scaler School of Technology", channel_id: "UC-59uyQUy8SeGlCNlfiDweQ" },
-                  { name: "NST", channel_id: "UCQmlyuni9n4OAjTnFnlvGBQ" },
-                  { name: "BST", channel_id: "UCyPECBwmgdkS1JvlWEtPeAg" },
-                  { name: "PW IOI", channel_id: "UCUikVoPsty2bGOCi2fZ_xZw" },
-                  { name: "uGSOT", channel_id: "UCh74gkhPCTm0wOMPlMeW36A" }
+                setYoutubeChannels([
+                  { name: "Bajaj Finance (Main Channel)", channel_id: "UCTngumZeLr6bj7IJFOryd_A" },
+                  { name: "Bajaj Finance Electronics", channel_id: "UCtivTQwMHU62caBjoFvJV4Q" },
+                  { name: "Bajaj Finance Money Adda", channel_id: "UCbJmzNUYHrGCPML2xbtIK4w" },
+                  { name: "Bajaj Finance Wheels", channel_id: "UCW66Hot6QpMzy8osmYVU1cA" },
+                  { name: "Bajaj Finance How to Guide", channel_id: "UCOkrjC6WaH_-TMlZ8Dxm5VA" },
+                  { name: "AI Se Karo", channel_id: "UC22oL4Y_yIWh1BxZmpnOK4w" }
                 ]);
-                toast.success("Dev mode values loaded!");
+                setYoutubeCompetitors([]);
+                setInstagramKey("");
+                setInstagramAccounts([]);
+                toast.success("Dev mode values loaded: 6 Bajaj & AI Se Karo tracked channels!");
               }}
               className="ml-4 px-2 py-1 bg-[#00b300]/20 text-[#00b300] dark:bg-[#00ff00]/20 dark:text-[#00ff00] text-[10px] font-bold uppercase tracking-widest rounded hover:bg-[#00b300]/30 dark:hover:bg-[#00ff00]/30 transition-colors"
             >

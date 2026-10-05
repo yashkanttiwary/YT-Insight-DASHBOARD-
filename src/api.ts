@@ -1,6 +1,15 @@
-import { DashboardKeys, YouTubeStats, InstagramStats } from "./types";
+import { DashboardKeys, YouTubeStats, InstagramStats, YouTubeChannelConfig } from "./types";
 
-function getKeysFromStorage(): DashboardKeys {
+export const DEFAULT_DEV_CHANNELS: YouTubeChannelConfig[] = [
+  { name: "Bajaj Finance (Main Channel)", channel_id: "UCTngumZeLr6bj7IJFOryd_A" },
+  { name: "Bajaj Finance Electronics", channel_id: "UCtivTQwMHU62caBjoFvJV4Q" },
+  { name: "Bajaj Finance Money Adda", channel_id: "UCbJmzNUYHrGCPML2xbtIK4w" },
+  { name: "Bajaj Finance Wheels", channel_id: "UCW66Hot6QpMzy8osmYVU1cA" },
+  { name: "Bajaj Finance How to Guide", channel_id: "UCOkrjC6WaH_-TMlZ8Dxm5VA" },
+  { name: "AI Se Karo", channel_id: "UC22oL4Y_yIWh1BxZmpnOK4w" }
+];
+
+export function getKeysFromStorage(): DashboardKeys {
   const keys: DashboardKeys = {
     youtubeKey: "",
     youtubeChannels: [],
@@ -18,7 +27,21 @@ function getKeysFromStorage(): DashboardKeys {
     const geminiKey = localStorage.getItem("f1_geminiKey");
 
     if (ytKey) keys.youtubeKey = ytKey;
-    if (ytChannels) keys.youtubeChannels = JSON.parse(ytChannels);
+    if (ytChannels) {
+      const parsedChannels = JSON.parse(ytChannels);
+      // Auto-migrate legacy demo channel if present
+      if (
+        Array.isArray(parsedChannels) &&
+        parsedChannels.some((c: any) => c.channel_id === "UCg6n0KpFmhje8kjjBOCRtGg" || c.name === "Kalvium")
+      ) {
+        keys.youtubeChannels = DEFAULT_DEV_CHANNELS;
+        keys.youtubeCompetitors = [];
+        localStorage.setItem("f1_youtubeChannels", JSON.stringify(DEFAULT_DEV_CHANNELS));
+        localStorage.setItem("f1_youtubeCompetitors", JSON.stringify([]));
+      } else {
+        keys.youtubeChannels = parsedChannels;
+      }
+    }
     if (ytCompetitors) keys.youtubeCompetitors = JSON.parse(ytCompetitors);
     if (igKey) keys.instagramKey = igKey;
     if (igAccounts) keys.instagramAccounts = JSON.parse(igAccounts);
@@ -200,4 +223,78 @@ export async function analyzeComments(comments: string[], providedKeys?: Dashboa
      throw new Error(errorMessage);
   }
   return res.json();
+}
+
+
+export const fetchNicheResearch = async (
+  niche: string,
+  keys: DashboardKeys
+) => {
+  const response = await fetch("/api/niche-research", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-gemini-key": keys.geminiKey || "",
+      "x-display-config": encodeURIComponent(JSON.stringify(keys.display || {})),
+    },
+    body: JSON.stringify({
+      niche,
+      youtubeKey: keys.youtubeKey,
+      youtubeChannels: keys.youtubeChannels || [],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || "Failed to fetch niche research");
+  }
+
+  return response.json();
+};
+
+export async function fetchVideosByIds(
+  videoIds: string[],
+  providedKeys?: DashboardKeys,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<any[]> {
+  const keys = providedKeys || getKeysFromStorage();
+  if (!keys.youtubeKey) throw new Error("YouTube API key missing");
+
+  const uniqueIds = Array.from(new Set(videoIds.map((id) => String(id).trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) return [];
+
+  // Batch into chunks of 300 to stream progress, avoid network timeouts and handle 10,000+ videos
+  const batchSize = 300;
+  const allVideos: any[] = [];
+
+  for (let i = 0; i < uniqueIds.length; i += batchSize) {
+    const chunk = uniqueIds.slice(i, i + batchSize);
+    const res = await fetch("/api/youtube-videos-by-id", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        youtubeKey: keys.youtubeKey,
+        videoIds: chunk,
+      }),
+    });
+
+    if (!res.ok) {
+      let errorMessage = "Failed to fetch ID videos from YouTube";
+      try {
+        const data = await res.json();
+        if (data.error) errorMessage = data.error;
+      } catch (e) {}
+      throw new Error(errorMessage);
+    }
+
+    const data = await res.json();
+    const batchVideos = data.videos || [];
+    allVideos.push(...batchVideos);
+
+    if (onProgress) {
+      onProgress(allVideos.length, uniqueIds.length);
+    }
+  }
+
+  return allVideos;
 }
