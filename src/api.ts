@@ -83,16 +83,20 @@ export async function checkStatus(providedKeys?: DashboardKeys) {
   };
 }
 
-export async function fetchYouTubeData(providedKeys?: DashboardKeys) {
+export async function fetchYouTubeData(providedKeys?: DashboardKeys, forceRefresh = false) {
   const keys = providedKeys || getKeysFromStorage();
 
-  const res = await fetch("/api/youtube", {
+  const res = await fetch("/api/youtube" + (forceRefresh ? "?force=true" : ""), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(forceRefresh ? { "x-force-refresh": "true" } : {})
+    },
     body: JSON.stringify({
       youtubeKey: keys.youtubeKey || "",
       youtubeChannels: keys.youtubeChannels || [],
-      displayConfig: keys.display || {}
+      displayConfig: keys.display || {},
+      forceRefresh,
     })
   });
 

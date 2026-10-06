@@ -1,14 +1,83 @@
 import { GoogleGenAI } from "@google/genai";
 import express from "express";
 import path from "path";
-
-
+import fs from "fs";
 
 const app = express();
 
-
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 app.use(express.json({ limit: '50mb' }));
+
+const ID_STORAGE_FILE = path.join(process.cwd(), "id_videos_store.json");
+const YT_CACHE_FILE = path.join(process.cwd(), "youtube_cache_store.json");
+
+// In-memory + disk persistent stores
+let serverYouTubeCache = new Map<string, any>();
+let serverVideoIdCache = new Map<string, any>();
+let serverChannelCache = new Map<string, any>();
+let serverIdVideosStore: { idVideos: any[]; hydratedVideos: any[]; lastSaved: string } = {
+  idVideos: [],
+  hydratedVideos: [],
+  lastSaved: "",
+};
+
+// Load existing disk caches on startup
+try {
+  if (fs.existsSync(ID_STORAGE_FILE)) {
+    const raw = fs.readFileSync(ID_STORAGE_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && Array.isArray(parsed.idVideos)) {
+      serverIdVideosStore = parsed;
+      console.log(`[Storage] Loaded ${serverIdVideosStore.idVideos.length} ID videos and ${serverIdVideosStore.hydratedVideos?.length || 0} hydrated items from disk.`);
+    }
+  }
+} catch (e) {
+  console.warn("Could not read ID storage file from disk", e);
+}
+
+try {
+  if (fs.existsSync(YT_CACHE_FILE)) {
+    const raw = fs.readFileSync(YT_CACHE_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed?.channelsCache) {
+      serverYouTubeCache = new Map(Object.entries(parsed.channelsCache));
+    }
+    if (parsed?.videoIdsCache) {
+      serverVideoIdCache = new Map(Object.entries(parsed.videoIdsCache));
+    }
+    if (parsed?.channelMetadataCache) {
+      serverChannelCache = new Map(Object.entries(parsed.channelMetadataCache));
+    }
+    console.log(`[Storage] Loaded ${serverVideoIdCache.size} video IDs cache and ${serverChannelCache.size} channels cache from disk.`);
+  }
+} catch (e) {
+  console.warn("Could not read YouTube cache file from disk", e);
+}
+
+function persistIdVideosToDisk() {
+  try {
+    const tmp = ID_STORAGE_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(serverIdVideosStore), "utf-8");
+    fs.renameSync(tmp, ID_STORAGE_FILE);
+  } catch (e) {
+    console.error("Failed to write ID storage to disk", e);
+  }
+}
+
+function persistYtCacheToDisk() {
+  try {
+    const payload = {
+      channelsCache: Object.fromEntries(serverYouTubeCache),
+      videoIdsCache: Object.fromEntries(serverVideoIdCache),
+      channelMetadataCache: Object.fromEntries(serverChannelCache),
+    };
+    const tmp = YT_CACHE_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(payload), "utf-8");
+    fs.renameSync(tmp, YT_CACHE_FILE);
+  } catch (e) {
+    console.error("Failed to write YouTube cache to disk", e);
+  }
+}
 
   // Helper to extract keys either from header (UI settings) or env var
   const safeParse = (str: string | undefined | null) => {
@@ -414,11 +483,6 @@ app.use(express.json({ limit: '50mb' }));
     }
   });
 
-  // Robust in-memory caches to prevent machine hangs, rate limits, and slow loading
-  const serverYouTubeCache = new Map<string, { timestamp: number; data: any }>();
-  const serverVideoIdCache = new Map<string, any>();
-  const CACHE_TTL_MS = 8 * 60 * 1000; // 8 minutes
-
   app.all("/api/youtube", async (req, res) => {
     try {
       const keys = getKeys(req);
@@ -444,12 +508,13 @@ app.use(express.json({ limit: '50mb' }));
         // ignore JSON parse error
       }
 
-      const forceRefresh = req.query.force === "true" || req.headers["x-force-refresh"] === "true";
+      const forceRefresh = req.query.force === "true" || req.headers["x-force-refresh"] === "true" || req.body?.forceRefresh === true;
       const cacheKey = JSON.stringify(keys.youtubeChannels) + `_${videoLimit}`;
       const cached = serverYouTubeCache.get(cacheKey);
 
-      if (!forceRefresh && cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
-        return res.json(cached.data);
+      // User instruction: Until user explicitly tells to refresh or delete, do NOT discard old fetch data!
+      if (!forceRefresh && cached) {
+        return res.json(cached);
       }
 
       const channelsDataItems = await resolveChannels(keys.youtubeChannels, keys.youtubeKey);
@@ -529,7 +594,8 @@ app.use(express.json({ limit: '50mb' }));
         channels: channelsDataItems || [],
         videos: videosData.items || []
       };
-      serverYouTubeCache.set(cacheKey, { timestamp: Date.now(), data: responsePayload });
+      serverYouTubeCache.set(cacheKey, responsePayload);
+      persistYtCacheToDisk();
 
       res.json(responsePayload);
     } catch (error: any) {
@@ -641,11 +707,157 @@ app.use(express.json({ limit: '50mb' }));
       );
       await Promise.all(workers);
 
-      res.json({ videos: [...cachedResults, ...allResults] });
+      // Extract unique channel IDs from the videos to identify and resolve channel metadata
+      const allFoundVideos = [...cachedResults, ...allResults];
+      const channelIdsToFetch: string[] = [];
+      const returnedChannelsMap = new Map<string, any>();
+
+      for (const v of allFoundVideos) {
+        const cId = v.snippet?.channelId;
+        if (cId && cId.startsWith("UC")) {
+          if (serverChannelCache.has(cId)) {
+            returnedChannelsMap.set(cId, serverChannelCache.get(cId));
+          } else if (!channelIdsToFetch.includes(cId)) {
+            channelIdsToFetch.push(cId);
+          }
+        }
+      }
+
+      if (channelIdsToFetch.length > 0) {
+        for (let i = 0; i < channelIdsToFetch.length; i += 50) {
+          const chunk = channelIdsToFetch.slice(i, i + 50);
+          try {
+            const chRes = await fetch(
+              `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&id=${chunk.join(",")}&key=${apiKey}`,
+              { signal: AbortSignal.timeout(6000) }
+            );
+            if (chRes.ok) {
+              const chData = await chRes.json();
+              for (const ch of chData.items || []) {
+                serverChannelCache.set(ch.id, ch);
+                returnedChannelsMap.set(ch.id, ch);
+              }
+            }
+          } catch (e) {
+            console.warn("Failed to fetch channel metadata batch", e);
+          }
+        }
+      }
+
+      // Persist new cache to disk so it survives server reboots/restarts
+      persistYtCacheToDisk();
+
+      res.json({
+        videos: allFoundVideos,
+        channels: Array.from(returnedChannelsMap.values()),
+      });
     } catch (error: any) {
       console.error("[YouTube ID Videos Error]", error.message);
       res.status(500).json({ error: "Failed to fetch ID videos: " + error.message });
     }
+  });
+
+  app.post("/api/youtube-channels-by-id", async (req, res) => {
+    try {
+      const keys = getKeys(req);
+      const { channelIds } = req.body;
+      const apiKey = req.body?.youtubeKey || keys.youtubeKey;
+      if (!apiKey) {
+        return res.status(400).json({ error: "Missing YouTube API Key" });
+      }
+      if (!Array.isArray(channelIds) || channelIds.length === 0) {
+        return res.json({ channels: [] });
+      }
+      const uniqueIds = Array.from(new Set(channelIds.map((id: any) => String(id).trim()).filter(Boolean)));
+      const results: any[] = [];
+      const uncached: string[] = [];
+      for (const id of uniqueIds) {
+        if (serverChannelCache.has(id)) {
+          results.push(serverChannelCache.get(id));
+        } else {
+          uncached.push(id);
+        }
+      }
+      if (uncached.length > 0) {
+        for (let i = 0; i < uncached.length; i += 50) {
+          const chunk = uncached.slice(i, i + 50);
+          try {
+            const chRes = await fetch(
+              `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&id=${chunk.join(",")}&key=${apiKey}`
+            );
+            if (chRes.ok) {
+              const chData = await chRes.json();
+              for (const ch of chData.items || []) {
+                serverChannelCache.set(ch.id, ch);
+                results.push(ch);
+              }
+            }
+          } catch (e) {
+            console.error("Failed to fetch channels chunk", e);
+          }
+        }
+        persistYtCacheToDisk();
+      }
+      res.json({ channels: results });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Endpoints for permanent ID Videos storage
+  app.get("/api/id-videos", (req, res) => {
+    res.json(serverIdVideosStore);
+  });
+
+  app.post("/api/id-videos", (req, res) => {
+    try {
+      const { idVideos, hydratedVideos } = req.body;
+      if (Array.isArray(idVideos)) {
+        serverIdVideosStore.idVideos = idVideos;
+      }
+      if (Array.isArray(hydratedVideos)) {
+        serverIdVideosStore.hydratedVideos = hydratedVideos;
+      }
+      serverIdVideosStore.lastSaved = new Date().toISOString();
+      persistIdVideosToDisk();
+      res.json({
+        success: true,
+        idCount: serverIdVideosStore.idVideos.length,
+        hydratedCount: serverIdVideosStore.hydratedVideos.length,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/id-videos/batch-hydrate", (req, res) => {
+    try {
+      const { batchVideos } = req.body;
+      if (Array.isArray(batchVideos) && batchVideos.length > 0) {
+        const existingMap = new Map<string, any>();
+        serverIdVideosStore.hydratedVideos.forEach((v) => existingMap.set(v.id, v));
+        batchVideos.forEach((v) => existingMap.set(v.id, v));
+        serverIdVideosStore.hydratedVideos = Array.from(existingMap.values());
+        serverIdVideosStore.lastSaved = new Date().toISOString();
+        persistIdVideosToDisk();
+      }
+      res.json({
+        success: true,
+        hydratedCount: serverIdVideosStore.hydratedVideos.length,
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/id-videos", (req, res) => {
+    serverIdVideosStore = {
+      idVideos: [],
+      hydratedVideos: [],
+      lastSaved: new Date().toISOString(),
+    };
+    persistIdVideosToDisk();
+    res.json({ success: true });
   });
 
   app.all("/api/instagram", async (req, res) => {

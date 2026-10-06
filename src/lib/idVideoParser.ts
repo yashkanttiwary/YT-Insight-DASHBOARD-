@@ -190,16 +190,20 @@ import {
   saveIdVideosDB,
   getIdVideosDB,
   saveHydratedVideosDB,
+  saveHydratedVideosBatchDB,
   getHydratedVideosDB,
   clearIdVideosDB,
+  cleanHydratedItem,
 } from "./idVideoStorage";
 
 export {
   saveIdVideosDB,
   getIdVideosDB,
   saveHydratedVideosDB,
+  saveHydratedVideosBatchDB,
   getHydratedVideosDB,
   clearIdVideosDB,
+  cleanHydratedItem,
 };
 
 const STORAGE_KEY = "f1_id_videos_metadata";
@@ -217,13 +221,12 @@ export function getIdVideosFromStorage(): IDVideoItem[] {
 export function saveIdVideosToStorage(videos: IDVideoItem[]): void {
   saveIdVideosDB(videos);
   try {
-    if (videos.length <= 500) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(videos));
-    } else {
-      localStorage.setItem("f1_id_videos_count", String(videos.length));
-    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(videos));
+    localStorage.setItem("f1_id_videos_count", String(videos.length));
   } catch (e) {
-    // Quota exceeded is safely swallowed because IndexedDB has the full dataset
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(videos.slice(0, 1000)));
+    } catch (_) {}
   }
 }
 
@@ -239,10 +242,10 @@ export function getHydratedIdVideosCache(): any[] {
 export function saveHydratedIdVideosCache(videos: any[]): void {
   saveHydratedVideosDB(videos);
   try {
-    if (videos.length <= 300) {
-      localStorage.setItem(HYDRATED_STORAGE_KEY, JSON.stringify(videos));
-    }
+    localStorage.setItem(HYDRATED_STORAGE_KEY, JSON.stringify(videos));
   } catch (e) {
-    // Quota exceeded is safely swallowed
+    try {
+      localStorage.setItem(HYDRATED_STORAGE_KEY, JSON.stringify(videos.slice(0, 500)));
+    } catch (_) {}
   }
 }

@@ -54,17 +54,28 @@ export function IDVideoModal({
   const [isParsingFile, setIsParsingFile] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
 
-  // Catalog search, filters and pagination (Product & Business prioritized, Content Team filtered)
+  // Catalog search, filters and pagination (Product, Business & Channel prioritized, Content Team filtered)
   const [catalogSearch, setCatalogSearch] = useState("");
   const [catalogBusinessFilter, setCatalogBusinessFilter] = useState("all");
   const [catalogProductFilter, setCatalogProductFilter] = useState("all");
+  const [catalogChannelFilter, setCatalogChannelFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [jumpPageInput, setJumpPageInput] = useState("");
 
   useEffect(() => {
+    if (isOpen) {
+      if (idVideos.length > 0) {
+        setActiveTab("catalog");
+      } else {
+        setActiveTab("import");
+      }
+    }
+  }, [isOpen, idVideos.length]);
+
+  useEffect(() => {
     setCurrentPage(1);
-  }, [catalogSearch, catalogBusinessFilter, catalogProductFilter, pageSize]);
+  }, [catalogSearch, catalogBusinessFilter, catalogProductFilter, catalogChannelFilter, pageSize]);
 
   // Parse text input
   const handleTextChange = (text: string) => {
@@ -146,7 +157,19 @@ export function IDVideoModal({
     return Array.from(set);
   }, [idVideos]);
 
-  // Filtered catalog: Content Team strictly kept, filtered by Business & Product
+  const allChannels = useMemo(() => {
+    const set = new Set<string>();
+    hydratedVideos.forEach((v: any) => {
+      const ch = v.snippet?.channelTitle || v._idMeta?.channelNameHint;
+      if (ch) set.add(ch);
+    });
+    idVideos.forEach((v) => {
+      if (v.channelNameHint) set.add(v.channelNameHint);
+    });
+    return Array.from(set).sort();
+  }, [hydratedVideos, idVideos]);
+
+  // Filtered catalog: Content Team strictly kept, filtered by Business, Product & Channel
   const filteredCatalog = useMemo(() => {
     const q = catalogSearch.toLowerCase().trim();
     return idVideos.filter((item) => {
@@ -155,7 +178,8 @@ export function IDVideoModal({
 
       const live = hydratedMap.get(item.id);
       const title = (live?.snippet?.title || item.topic || "").toLowerCase();
-      const channel = (live?.snippet?.channelTitle || item.channelNameHint || "").toLowerCase();
+      const rawChannel = live?.snippet?.channelTitle || item.channelNameHint || "";
+      const channel = rawChannel.toLowerCase();
       const prod = (item.product || item.subtopic || "").toLowerCase();
       const biz = (item.business || item.category || "").toLowerCase();
 
@@ -177,9 +201,13 @@ export function IDVideoModal({
         item.product === catalogProductFilter ||
         item.subtopic === catalogProductFilter;
 
-      return matchesSearch && matchesBusiness && matchesProduct;
+      const matchesChannel =
+        catalogChannelFilter === "all" ||
+        rawChannel === catalogChannelFilter;
+
+      return matchesSearch && matchesBusiness && matchesProduct && matchesChannel;
     });
-  }, [idVideos, hydratedMap, catalogSearch, catalogBusinessFilter, catalogProductFilter]);
+  }, [idVideos, hydratedMap, catalogSearch, catalogBusinessFilter, catalogProductFilter, catalogChannelFilter]);
 
   // Pagination calculation
   const totalPages = Math.max(1, Math.ceil(filteredCatalog.length / pageSize));
@@ -296,6 +324,28 @@ export function IDVideoModal({
         <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
           {activeTab === "import" ? (
             <div className="space-y-6">
+              {idVideos.length > 0 && (
+                <div className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                    <div>
+                      <div className="text-xs font-bold text-emerald-800 dark:text-emerald-200">
+                        {idVideos.length.toLocaleString()} Content Team videos currently active in catalog
+                      </div>
+                      <div className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80">
+                        All previously fetched live YouTube statistics are safely stored and will not be lost.
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab("catalog")}
+                    className="px-3 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors shadow-sm"
+                  >
+                    View Catalog →
+                  </button>
+                </div>
+              )}
+
               {/* Upload Controls Banner */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-2 p-4 rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-white/[0.02] flex flex-col justify-between">
@@ -505,6 +555,22 @@ export function IDVideoModal({
                     </select>
                   )}
 
+                  {allChannels.length > 0 && (
+                    <select
+                      value={catalogChannelFilter}
+                      onChange={(e) => setCatalogChannelFilter(e.target.value)}
+                      className="px-3 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-white/10 bg-white dark:bg-black/50 text-gray-900 dark:text-white"
+                      title="Filter by Identified YouTube Channel"
+                    >
+                      <option value="all">All Channels ({allChannels.length})</option>
+                      {allChannels.map((c) => (
+                        <option key={c} value={c}>
+                          📺 {c}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
                   <div className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 whitespace-nowrap flex items-center gap-1">
                     <span>✓ Content Team Only</span>
                   </div>
@@ -557,9 +623,11 @@ export function IDVideoModal({
                           <th className="p-3 border-b border-gray-200 dark:border-white/10">Video</th>
                           <th className="p-3 border-b border-gray-200 dark:border-white/10">Product</th>
                           <th className="p-3 border-b border-gray-200 dark:border-white/10">Business</th>
-                          <th className="p-3 border-b border-gray-200 dark:border-white/10">Channel</th>
+                          <th className="p-3 border-b border-gray-200 dark:border-white/10">Identified Channel</th>
                           <th className="p-3 border-b border-gray-200 dark:border-white/10">Team</th>
                           <th className="p-3 border-b border-gray-200 dark:border-white/10 text-right">Views</th>
+                          <th className="p-3 border-b border-gray-200 dark:border-white/10 text-right">Likes</th>
+                          <th className="p-3 border-b border-gray-200 dark:border-white/10 text-right">Comments</th>
                           <th className="p-3 border-b border-gray-200 dark:border-white/10 text-right">Type</th>
                           <th className="p-3 border-b border-gray-200 dark:border-white/10 text-center">Playbook</th>
                           <th className="p-3 border-b border-gray-200 dark:border-white/10 text-center">Action</th>
@@ -573,8 +641,11 @@ export function IDVideoModal({
                             live?.snippet?.thumbnails?.default?.url ||
                             `https://img.youtube.com/vi/${item.id}/mqdefault.jpg`;
                           const title = live?.snippet?.title || item.topic || `Video ${item.id}`;
-                          const views = live ? Number(live.statistics?.viewCount || 0) : null;
+                          const views = live && live.statistics?.viewCount !== undefined ? Number(live.statistics.viewCount) : null;
+                          const likes = live && live.statistics?.likeCount !== undefined ? Number(live.statistics.likeCount) : null;
+                          const comments = live && live.statistics?.commentCount !== undefined ? Number(live.statistics.commentCount) : null;
                           const channelTitle = live?.snippet?.channelTitle || item.channelNameHint || "Loaded Channel";
+                          const channelId = live?.snippet?.channelId || item.channelId;
                           const isShort = live?._isShort;
 
                           return (
@@ -626,11 +697,18 @@ export function IDVideoModal({
                                 </span>
                               </td>
 
-                              {/* Channel */}
+                              {/* Identified Channel */}
                               <td className="p-3 whitespace-nowrap">
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-                                  {channelTitle}
-                                </span>
+                                <div className="flex flex-col">
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 inline-flex items-center gap-1 max-w-[140px] truncate" title={channelTitle}>
+                                    📺 {channelTitle}
+                                  </span>
+                                  {channelId && (
+                                    <span className="text-[9px] text-gray-400 font-mono mt-0.5 max-w-[140px] truncate" title={channelId}>
+                                      {channelId}
+                                    </span>
+                                  )}
+                                </div>
                               </td>
 
                               {/* Team */}
@@ -641,11 +719,25 @@ export function IDVideoModal({
                               </td>
 
                               {/* Views */}
-                              <td className="p-3 text-right font-mono font-bold text-gray-900 dark:text-white whitespace-nowrap">
+                              <td className="p-3 text-right font-mono font-bold text-[#00b300] dark:text-[#00ff00] whitespace-nowrap">
                                 {views !== null ? views.toLocaleString() : (
                                   <span className="text-gray-400 font-normal italic text-[10px]">
                                     Queued
                                   </span>
+                                )}
+                              </td>
+
+                              {/* Likes */}
+                              <td className="p-3 text-right font-mono text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                                {likes !== null ? likes.toLocaleString() : (
+                                  <span className="text-gray-400 font-normal italic text-[10px]">-</span>
+                                )}
+                              </td>
+
+                              {/* Comments */}
+                              <td className="p-3 text-right font-mono text-purple-600 dark:text-purple-400 whitespace-nowrap">
+                                {comments !== null ? comments.toLocaleString() : (
+                                  <span className="text-gray-400 font-normal italic text-[10px]">-</span>
                                 )}
                               </td>
 

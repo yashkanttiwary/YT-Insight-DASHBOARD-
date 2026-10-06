@@ -37,6 +37,10 @@ import {
   saveIdVideosToStorage,
   getHydratedIdVideosCache,
   saveHydratedIdVideosCache,
+  saveHydratedVideosBatchDB,
+  cleanHydratedItem,
+  getIdVideosDB,
+  getHydratedVideosDB,
   formatLabel,
 } from "./lib/idVideoParser";
 import {
@@ -310,10 +314,83 @@ export default function App() {
     completed: number;
     total: number;
   }>({ isSyncing: false, completed: 0, total: 0 });
+  const [idResolvedChannels, setIdResolvedChannels] = useState<any[]>([]);
   const syncAbortControllerRef = useRef<AbortController | null>(null);
+
+  // Unbreakable persistence: Hydrate ID videos and live metrics on mount from disk / IndexedDB / localStorage
+  useEffect(() => {
+    let isMounted = true;
+    async function initPersistentIdVideos() {
+      try {
+        const storedVideos = await getIdVideosDB();
+        if (!isMounted) return;
+        if (storedVideos && storedVideos.length > 0) {
+          setIdVideos(storedVideos);
+          const storedHydrated = await getHydratedVideosDB();
+          if (isMounted) {
+            if (storedHydrated && storedHydrated.length > 0) {
+              const hydratedMap = new Map<string, any>();
+              storedHydrated.forEach((v) => hydratedMap.set(v.id, v));
+              const merged = storedVideos.map((item) => {
+                const existing = hydratedMap.get(item.id);
+                if (existing) {
+                  return { ...existing, _idMeta: item };
+                }
+                return {
+                  id: item.id,
+                  snippet: {
+                    title: item.topic || `Video ${item.id}`,
+                    publishedAt: new Date().toISOString(),
+                    channelTitle: item.channelNameHint || "Loaded Channel",
+                    thumbnails: {
+                      default: { url: `https://img.youtube.com/vi/${item.id}/default.jpg` },
+                      medium: { url: `https://img.youtube.com/vi/${item.id}/mqdefault.jpg` },
+                    },
+                  },
+                  statistics: {
+                    viewCount: "0",
+                    likeCount: "0",
+                    commentCount: "0",
+                  },
+                  _isShort: false,
+                  _idMeta: item,
+                };
+              });
+              setHydratedIdVideos(merged);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Storage hydration warning:", err);
+      }
+    }
+    initPersistentIdVideos();
+
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === "visible") {
+        try {
+          const freshVideos = await getIdVideosDB();
+          if (freshVideos && freshVideos.length > 0 && isMounted) {
+            setIdVideos(freshVideos);
+            const freshHydrated = await getHydratedVideosDB();
+            if (freshHydrated && freshHydrated.length > 0 && isMounted) {
+              setHydratedIdVideos(freshHydrated);
+            }
+          }
+        } catch (_) {}
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      isMounted = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   const [idBusinessFilter, setIdBusinessFilter] = useState("all");
   const [idProductFilter, setIdProductFilter] = useState("all");
+  const [idChannelFilter, setIdChannelFilter] = useState("all");
   const [idPersonaFilter, setIdPersonaFilter] = useState("all");
 
   const [leaderboardPage, setLeaderboardPage] = useState(1);
@@ -338,10 +415,12 @@ export default function App() {
         meta.subtopic !== idProductFilter
       )
         return false;
+      const ch = v.snippet?.channelTitle || meta.channelNameHint;
+      if (idChannelFilter !== "all" && ch !== idChannelFilter) return false;
       if (idPersonaFilter !== "all" && meta.persona !== idPersonaFilter) return false;
       return true;
     });
-  }, [hydratedIdVideos, idBusinessFilter, idProductFilter, idPersonaFilter]);
+  }, [hydratedIdVideos, idBusinessFilter, idProductFilter, idChannelFilter, idPersonaFilter]);
 
   const availableBusinesses = useMemo(() => {
     const set = new Set<string>();
@@ -363,6 +442,43 @@ export default function App() {
     return Array.from(set);
   }, [idVideos]);
 
+  const availableChannels = useMemo(() => {
+    const set = new Set<string>();
+    hydratedIdVideos.forEach((v: any) => {
+      const meta = v._idMeta;
+      if (meta?.team && !meta.team.toLowerCase().includes("content")) return;
+      const ch = v.snippet?.channelTitle || meta?.channelNameHint;
+      if (ch) set.add(ch);
+    });
+    idVideos.forEach((v) => {
+      if (v.team && !v.team.toLowerCase().includes("content")) return;
+      if (v.channelNameHint) set.add(v.channelNameHint);
+    });
+    return Array.from(set).sort();
+  }, [hydratedIdVideos, idVideos]);
+
+  const idAggregateMetrics = useMemo(() => {
+    let totalViews = 0;
+    let totalLikes = 0;
+    let totalComments = 0;
+    const channels = new Set<string>();
+
+    idFilteredVideos.forEach((v: any) => {
+      totalViews += Number(v.statistics?.viewCount || 0);
+      totalLikes += Number(v.statistics?.likeCount || 0);
+      totalComments += Number(v.statistics?.commentCount || 0);
+      const ch = v.snippet?.channelTitle || v._idMeta?.channelNameHint;
+      if (ch) channels.add(ch);
+    });
+
+    return {
+      totalViews,
+      totalLikes,
+      totalComments,
+      channelCount: channels.size,
+    };
+  }, [idFilteredVideos]);
+
   const availablePersonas = useMemo(() => {
     const set = new Set<string>();
     idVideos.forEach((v) => {
@@ -382,7 +498,7 @@ export default function App() {
     toast("Live metric sync paused");
   };
 
-  const startProgressiveSync = async (itemsToSync: IDVideoItem[]) => {
+  const startProgressiveSync = async (itemsToSync: IDVideoItem[], forceRefresh = false) => {
     if (!itemsToSync || itemsToSync.length === 0) return;
 
     if (syncAbortControllerRef.current) {
@@ -392,17 +508,42 @@ export default function App() {
     syncAbortControllerRef.current = controller;
     const signal = controller.signal;
 
+    // Filter to only items that need syncing if not forced refresh
+    const existingStatsMap = new Map<string, any>();
+    hydratedIdVideos.forEach((v) => {
+      if (v?.statistics && (v.statistics.viewCount !== "0" || v.statistics.likeCount !== "0")) {
+        existingStatsMap.set(v.id, v);
+      }
+    });
+
     const uniqueIds = Array.from(new Set(itemsToSync.map((i) => i.id)));
+    // If not forcing refresh, identify which IDs already have stats
+    const idsNeedingFetch = forceRefresh
+      ? uniqueIds
+      : uniqueIds.filter((id) => !existingStatsMap.has(id));
+
     setIsSyncingIdVideos(true);
-    setIdSyncProgress({ isSyncing: true, completed: 0, total: uniqueIds.length });
+    const initialCompleted = uniqueIds.length - idsNeedingFetch.length;
+    setIdSyncProgress({
+      isSyncing: true,
+      completed: initialCompleted,
+      total: uniqueIds.length,
+    });
+
+    if (idsNeedingFetch.length === 0) {
+      setIsSyncingIdVideos(false);
+      setIdSyncProgress({ isSyncing: false, completed: uniqueIds.length, total: uniqueIds.length });
+      toast.success(`All ${uniqueIds.length.toLocaleString()} Content Team videos already loaded with live stats!`);
+      return;
+    }
 
     const batchSize = 50;
-    let completed = 0;
+    let completed = initialCompleted;
 
-    for (let i = 0; i < uniqueIds.length; i += batchSize) {
+    for (let i = 0; i < idsNeedingFetch.length; i += batchSize) {
       if (signal.aborted) break;
 
-      const chunk = uniqueIds.slice(i, i + batchSize);
+      const chunk = idsNeedingFetch.slice(i, i + batchSize);
       try {
         const res = await fetch("/api/youtube-videos-by-id", {
           method: "POST",
@@ -418,20 +559,58 @@ export default function App() {
             const batchMap = new Map<string, any>();
             batchVideos.forEach((v: any) => batchMap.set(v.id, v));
 
+            const updatedBatch: any[] = [];
             setHydratedIdVideos((prev) => {
               const updated = prev.map((item) => {
                 const live = batchMap.get(item.id);
                 if (live) {
+                  const cleaned = cleanHydratedItem({
+                    ...live,
+                    _idMeta: {
+                      ...item._idMeta,
+                      channelNameHint: live.snippet?.channelTitle || item._idMeta?.channelNameHint,
+                      channelId: live.snippet?.channelId || item._idMeta?.channelId,
+                    },
+                  });
+                  updatedBatch.push(cleaned);
+                  return cleaned;
+                }
+                return item;
+              });
+              return updated;
+            });
+
+            // Also update idVideos so the identified channel name persists in the curated catalog
+            setIdVideos((prev) => {
+              const updated = prev.map((item) => {
+                const live = batchMap.get(item.id);
+                if (live?.snippet?.channelTitle) {
                   return {
-                    ...(live as Record<string, any>),
-                    _idMeta: item._idMeta,
+                    ...item,
+                    channelNameHint: live.snippet.channelTitle,
+                    channelId: live.snippet.channelId || item.channelId,
                   };
                 }
                 return item;
               });
-              saveHydratedIdVideosCache(updated);
+              saveIdVideosToStorage(updated);
               return updated;
             });
+
+            // Persist the batch incrementally so data is NEVER lost even if tab switches
+            if (updatedBatch.length > 0) {
+              saveHydratedVideosBatchDB(updatedBatch);
+            }
+
+            // If YouTube API resolved channel metadata, update idResolvedChannels
+            if (data.channels && Array.isArray(data.channels) && data.channels.length > 0) {
+              setIdResolvedChannels((prev) => {
+                const map = new Map();
+                prev.forEach((c) => map.set(c.id, c));
+                data.channels.forEach((c: any) => map.set(c.id, c));
+                return Array.from(map.values());
+              });
+            }
           }
         }
       } catch (err: any) {
@@ -473,8 +652,19 @@ export default function App() {
       }
 
       // Optimistic instant hydration from sheet metadata (< 10ms)
+      // Preserves all existing live metrics!
       const existingMap = new Map<string, any>();
-      hydratedIdVideos.forEach((v) => existingMap.set(v.id, v));
+      hydratedIdVideos.forEach((v) => {
+        if (v?.statistics && (v.statistics.viewCount !== "0" || v.statistics.likeCount !== "0")) {
+          existingMap.set(v.id, v);
+        }
+      });
+      const cached = getHydratedIdVideosCache();
+      cached.forEach((v) => {
+        if (v?.statistics && !existingMap.has(v.id) && (v.statistics.viewCount !== "0" || v.statistics.likeCount !== "0")) {
+          existingMap.set(v.id, v);
+        }
+      });
 
       const initialHydrated = items.map((item) => {
         const existing = existingMap.get(item.id);
@@ -509,9 +699,9 @@ export default function App() {
       saveHydratedIdVideosCache(initialHydrated);
       setDashboardMode("id_video");
       localStorage.setItem("f1_dashboardMode", "id_video");
-      showNotification(`Loaded ${items.length.toLocaleString()} videos from sheet! Starting background live sync...`);
+      showNotification(`Loaded ${items.length.toLocaleString()} Content Team videos from sheet! Starting background live sync...`);
 
-      // Kick off background progressive sync
+      // Kick off background progressive sync (skipping already fetched stats)
       startProgressiveSync(items);
     } catch (err: any) {
       console.error("Failed to save ID videos", err);
@@ -1953,13 +2143,33 @@ export default function App() {
                 <div className="flex items-center gap-3">
                   <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
                         ⚡ ID Video Mode Active (Integrated Discovery)
                       </span>
                       <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
                         {idFilteredVideos.length} / {idVideos.length} Curated Videos
                       </span>
+                      {idAggregateMetrics.channelCount > 0 && (
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/20">
+                          📺 {idAggregateMetrics.channelCount} Channels
+                        </span>
+                      )}
+                      {idAggregateMetrics.totalViews > 0 && (
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20">
+                          👁️ {idAggregateMetrics.totalViews.toLocaleString()} Views
+                        </span>
+                      )}
+                      {idAggregateMetrics.totalLikes > 0 && (
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/20">
+                          👍 {idAggregateMetrics.totalLikes.toLocaleString()} Likes
+                        </span>
+                      )}
+                      {idAggregateMetrics.totalComments > 0 && (
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20">
+                          💬 {idAggregateMetrics.totalComments.toLocaleString()} Comments
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
                       All reports, notepad comparisons, and leaderboards are scoped strictly to your team's spreadsheet deliverables.
@@ -1999,6 +2209,22 @@ export default function App() {
                         <option value="all">All ({availableProducts.length})</option>
                         {availableProducts.map((p) => (
                           <option key={p} value={p}>{formatLabel(p)}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {availableChannels.length > 1 && (
+                    <div className="flex items-center gap-1.5 text-xs bg-white dark:bg-black/50 px-2.5 py-1 rounded-lg border border-gray-200 dark:border-white/10">
+                      <span className="text-gray-500 font-bold uppercase text-[9px]">Channel:</span>
+                      <select
+                        value={idChannelFilter}
+                        onChange={(e) => setIdChannelFilter(e.target.value)}
+                        className="text-xs font-bold bg-transparent text-gray-900 dark:text-white focus:outline-none"
+                      >
+                        <option value="all">All Channels ({availableChannels.length})</option>
+                        {availableChannels.map((c) => (
+                          <option key={c} value={c}>📺 {c}</option>
                         ))}
                       </select>
                     </div>
@@ -3530,6 +3756,16 @@ export default function App() {
                                     <span className="text-sm font-mono text-gray-900 dark:text-white">
                                       {Number(
                                         video.statistics.likeCount || 0,
+                                      ).toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <div className="flex flex-col items-end w-16" title="Total User Comments">
+                                    <span className="text-[8px] text-gray-500 uppercase tracking-widest font-bold">
+                                      Comments
+                                    </span>
+                                    <span className="text-sm font-mono text-purple-600 dark:text-purple-400">
+                                      {Number(
+                                        video.statistics.commentCount || 0,
                                       ).toLocaleString()}
                                     </span>
                                   </div>
@@ -5164,6 +5400,7 @@ export default function App() {
         onSaveIdVideos={handleSaveIdVideos}
         onClearIdVideos={handleClearIdVideos}
         isSyncing={isSyncingIdVideos}
+        syncProgress={{ loaded: idSyncProgress.completed, total: idSyncProgress.total }}
       />
 
       {hoveredVideo && (
